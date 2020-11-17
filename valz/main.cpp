@@ -16,12 +16,17 @@
 #include <memory>
 #include <iomanip>
 
+using namespace std;
+
 #include "va/va.h"
 #include "va/va_drm.h"
 #include "va/va_drmcommon.h"
 #include "ze_api.h"
 
 #include "video.h"
+
+const char* kernel_spv_file = "../add_kernel.spv";
+const char* kernel_func_name = "cmdlist_add_constant";
 
 VADisplay va_dpy = NULL;
 int va_fd = -1;
@@ -154,7 +159,6 @@ inline ze_device_handle_t findDevice(
 
     return found;
 }
-
 
 #define CHECK_VASTATUS(va_status,func)                                    \
 if (va_status != VA_STATUS_SUCCESS) {                                     \
@@ -314,6 +318,28 @@ void printDesc(VADRMPRIMESurfaceDescriptor &prime_desc)
     }
 }
 
+int readKernel(vector<char>& binary)
+{
+    FILE *fp = nullptr;
+    size_t nsize = 0;
+    fp = fopen(kernel_spv_file, "rb");
+    if (fp) {
+        fseek(fp, 0, SEEK_END);
+        nsize = (size_t)ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+
+        binary.resize(nsize+1);
+        memset(binary.data(), 0, binary.size());
+        fread(binary.data(), sizeof(unsigned char), nsize, fp);
+
+        fclose(fp);
+        return 0;
+    }
+    
+    printf("ERROR: cannot open kernel spv file %\n", kernel_spv_file);
+    return -1;
+}
+
 int main() 
 {
     ze_result_t result;
@@ -392,6 +418,94 @@ int main()
         return -1;
     }
 
+    // Create module
+    vector<char> kernel_binary;
+    if (readKernel(kernel_binary) != 0)
+        return -1;
+    ze_module_handle_t module = nullptr;
+    ze_module_desc_t module_desc = {};
+    module_desc.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
+    module_desc.pNext = nullptr;
+    module_desc.format = ZE_MODULE_FORMAT_IL_SPIRV;
+    module_desc.inputSize = static_cast<uint32_t>(kernel_binary.size());
+    module_desc.pInputModule = reinterpret_cast<const uint8_t *>(kernel_binary.data());
+    module_desc.pBuildFlags = nullptr;
+    result = zeModuleCreate(context, pDevice, &module_desc, &module, nullptr);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeModuleCreate Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    // Create kernel
+    ze_kernel_handle_t function = nullptr;
+    ze_kernel_desc_t function_desc = {};
+    function_desc.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
+    function_desc.pNext = nullptr;
+    function_desc.flags = 0;
+    function_desc.pKernelName = kernel_func_name;
+    result = zeKernelCreate(module, &function_desc, &function);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeKernelCreate Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    result = zeKernelSetGroupSize(function, 1, 1, 1);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeKernelSetGroupSize Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    size_t size = 256;
+    size_t alignment = 1024;
+    void *memory = nullptr;
+    ze_device_mem_alloc_desc_t device_desc = {};
+    device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    device_desc.ordinal = 0;
+    device_desc.flags = 0;
+    device_desc.pNext = nullptr;
+    ze_host_mem_alloc_desc_t host_desc = {};
+    host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
+    host_desc.flags = 0;
+    result = zeMemAllocShared(context, &device_desc, &host_desc, size, alignment, pDevice, &memory);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeMemAllocShared Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    result = zeKernelSetArgumentValue(function, 0, sizeof(memory), &memory);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeKernelSetArgumentValue Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+    const int addval = 10;
+    result = zeKernelSetArgumentValue(function, 1, sizeof(addval), &addval);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeKernelSetArgumentValue Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    // Create an immediate command list
+    ze_command_list_handle_t commandlist = nullptr;
+    ze_command_queue_desc_t queue_desc = {};
+    queue_desc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
+    queue_desc.pNext = nullptr;
+    queue_desc.ordinal = 0;
+    queue_desc.index = 0;
+    queue_desc.flags = 0;
+    queue_desc.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
+    queue_desc.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
+    result = zeCommandListCreateImmediate(context, pDevice, &queue_desc, &commandlist);
+    if(result != ZE_RESULT_SUCCESS) {
+        printf("ERROR: zeKernelSetGroupSize Failed with return code: 0x%08x\n", result);
+        return -1;
+    }
+
+    // Immediately submit a kernel to the device
+    //zeCommandListAppendLaunchKernel(hCommandList, hKernel, &launchArgs, nullptr, 0, nullptr);
+
+
+
+#if 0
     // Set up the request to import the external memory handle
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -418,6 +532,7 @@ int main()
         printf("ERROR: zeMemAllocDevice Failed with return code: 0x%08x\n", result);
         return -1;
     }
+#endif
 
     zeContextDestroy(context);
 
