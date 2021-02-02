@@ -32,6 +32,22 @@ VADisplay va_dpy = NULL;
 int va_fd = -1;
 bool dump_decode_output = false;
 
+#define CHECK_VA_STATUS(va_status, func)                                    \
+if (va_status != VA_STATUS_SUCCESS) {                                     \
+    fprintf(stderr,"%s:%s (%d) failed, exit\n", __func__, func, __LINE__); \
+    exit(1);                                                              \
+} else { \
+    printf("INFO[VA]: %s succeed\n", func); \
+}
+
+#define CHECK_ZE_STATUS(err, msg) \
+if (err < 0 ) { \
+    printf("ERROR: %s failed with err = 0x%08x, in function %s, line %d\n", msg, err, __FUNCTION__, __LINE__); \
+    exit(0); \
+} else { \
+    printf("INFO[ZE]: %s succeed\n", msg); \
+}
+
 int initVA()
 {
     VADisplay disp;
@@ -69,103 +85,6 @@ int initVA()
     return 0;
 }
 
-inline ze_device_handle_t findDevice(
-    ze_driver_handle_t pDriver,
-    ze_device_type_t type)
-{
-    // get all devices
-    uint32_t deviceCount = 0;
-    zeDeviceGet(pDriver, &deviceCount, nullptr);
-
-    std::vector<ze_device_handle_t> devices(deviceCount);
-    zeDeviceGet(pDriver, &deviceCount, devices.data());
-
-    ze_device_handle_t found = nullptr;
-
-    // for each device, find the first one matching the type
-    for(uint32_t device = 0; device < deviceCount; ++device)
-    {
-        auto phDevice = devices[device];
-
-        ze_device_properties_t device_properties = {};
-        device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-        zeDeviceGetProperties(phDevice, &device_properties);
-
-        if(type == device_properties.type)
-        {
-            found = phDevice;
-
-            ze_driver_properties_t driver_properties = {};
-            driver_properties.stype = ZE_STRUCTURE_TYPE_DRIVER_PROPERTIES;
-            zeDriverGetProperties(pDriver, &driver_properties);
-
-            //std::cout << "Found "<< to_string(type) << " device..." << "\n";
-            //std::cout << "Driver version: " << driver_properties.driverVersion << "\n";
-
-            ze_api_version_t version = {};
-            zeDriverGetApiVersion(pDriver, &version);
-            //std::cout << "API version: " << to_string(version) << "\n";
-
-            //std::cout << to_string(device_properties) << "\n";
-
-            ze_device_compute_properties_t compute_properties = {};
-            compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
-            zeDeviceGetComputeProperties(phDevice, &compute_properties);
-            //std::cout << to_string(compute_properties) << "\n";
-
-            uint32_t memoryCount = 0;
-            zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
-            auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
-            for( uint32_t mem = 0; mem < memoryCount; ++mem )
-            {
-                pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
-                pMemoryProperties[mem].pNext = nullptr;
-            }
-            zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
-            for( uint32_t mem = 0; mem < memoryCount; ++mem )
-            {
-                //std::cout << to_string( pMemoryProperties[ mem ] ) << "\n";
-            }
-            delete[] pMemoryProperties;
-
-            ze_device_memory_access_properties_t memory_access_properties = {};
-            memory_access_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_ACCESS_PROPERTIES;
-            zeDeviceGetMemoryAccessProperties(phDevice, &memory_access_properties);
-            //std::cout << to_string( memory_access_properties ) << "\n";
-
-            uint32_t cacheCount = 0;
-            zeDeviceGetCacheProperties(phDevice, &cacheCount, nullptr );
-            auto pCacheProperties = new ze_device_cache_properties_t[cacheCount];
-            for( uint32_t cache = 0; cache < cacheCount; ++cache )
-            {
-                pCacheProperties[cache].stype = ZE_STRUCTURE_TYPE_DEVICE_CACHE_PROPERTIES;
-                pCacheProperties[cache].pNext = nullptr;
-            }
-            zeDeviceGetCacheProperties(phDevice, &cacheCount, pCacheProperties);
-            for( uint32_t cache = 0; cache < cacheCount; ++cache )
-            {
-                //std::cout << to_string( pCacheProperties[ cache ] ) << "\n";
-            }
-            delete[] pCacheProperties;
-
-            ze_device_image_properties_t image_properties = {};
-            image_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_IMAGE_PROPERTIES;
-            zeDeviceGetImageProperties(phDevice, &image_properties);
-            //std::cout << to_string( image_properties ) << "\n";
-
-            break;
-        }
-    }
-
-    return found;
-}
-
-#define CHECK_VASTATUS(va_status,func)                                    \
-if (va_status != VA_STATUS_SUCCESS) {                                     \
-    fprintf(stderr,"%s:%s (%d) failed, exit\n", __func__, func, __LINE__); \
-    exit(1);                                                              \
-}
-
 int decodeFrame(VASurfaceID& frame)
 {
     VAEntrypoint entrypoints[5];
@@ -181,7 +100,7 @@ int decodeFrame(VASurfaceID& frame)
 
     va_status = vaQueryConfigEntrypoints(va_dpy, VAProfileH264Main, entrypoints, 
                              &num_entrypoints);
-    CHECK_VASTATUS(va_status, "vaQueryConfigEntrypoints");
+    CHECK_VA_STATUS(va_status, "vaQueryConfigEntrypoints");
 
     for	(vld_entrypoint = 0; vld_entrypoint < num_entrypoints; vld_entrypoint++) {
         if (entrypoints[vld_entrypoint] == VAEntrypointVLD)
@@ -201,69 +120,65 @@ int decodeFrame(VASurfaceID& frame)
     }
 
     va_status = vaCreateConfig(va_dpy, VAProfileH264Main, VAEntrypointVLD, &attrib, 1, &config_id);
-    CHECK_VASTATUS(va_status, "vaQueryConfigEntrypoints");
+    CHECK_VA_STATUS(va_status, "vaQueryConfigEntrypoints");
 
-    for (size_t i = 0; i < RT_NUM; i++)
-    {
+    for (size_t i = 0; i < RT_NUM; i++) {
         va_status = vaCreateSurfaces(va_dpy, VA_RT_FORMAT_YUV420, CLIP_WIDTH, CLIP_HEIGHT,  &surface_id[i], 1, NULL, 0 );
-        CHECK_VASTATUS(va_status, "vaCreateSurfaces");
+        CHECK_VA_STATUS(va_status, "vaCreateSurfaces");
     }
 
     /* Create a context for this decode pipe */
     va_status = vaCreateContext(va_dpy, config_id, CLIP_WIDTH, ((CLIP_HEIGHT+15)/16)*16, VA_PROGRESSIVE, surface_id, RT_NUM, &context_id);
-    CHECK_VASTATUS(va_status, "vaCreateContext");
+    CHECK_VA_STATUS(va_status, "vaCreateContext");
 
     va_status = vaCreateBuffer(va_dpy, context_id, VAPictureParameterBufferType, pic_size, 1, &pic_param, &pic_param_buf);
-    CHECK_VASTATUS(va_status, "vaCreateBuffer type = VAPictureParameterBufferType");
+    CHECK_VA_STATUS(va_status, "vaCreateBuffer type = VAPictureParameterBufferType");
     va_status = vaCreateBuffer(va_dpy, context_id, VAIQMatrixBufferType, iq_size, 1, &iq_matrix, &iqmatrix_buf );
-    CHECK_VASTATUS(va_status, "vaCreateBuffer type = VAIQMatrixBufferType");
+    CHECK_VA_STATUS(va_status, "vaCreateBuffer type = VAIQMatrixBufferType");
     va_status = vaCreateBuffer(va_dpy, context_id, VASliceParameterBufferType, slc_size, 1, &slc_param, &slice_param_buf);
-    CHECK_VASTATUS(va_status, "vaCreateBuffer type = VASliceParameterBufferType");
+    CHECK_VA_STATUS(va_status, "vaCreateBuffer type = VASliceParameterBufferType");
     va_status = vaCreateBuffer(va_dpy, context_id, VASliceDataBufferType, bs_size, 1, bs_data, &slice_data_buf);
-    CHECK_VASTATUS(va_status, "vaCreateBuffer type = VASliceDataBufferType");
+    CHECK_VA_STATUS(va_status, "vaCreateBuffer type = VASliceDataBufferType");
 
     /* send decode workload to GPU */
     va_status = vaBeginPicture(va_dpy, context_id, surface_id[RT_ID]);
-    CHECK_VASTATUS(va_status, "vaBeginPicture");
+    CHECK_VA_STATUS(va_status, "vaBeginPicture");
     va_status = vaRenderPicture(va_dpy,context_id, &pic_param_buf, 1);
-    CHECK_VASTATUS(va_status, "vaRenderPicture");
+    CHECK_VA_STATUS(va_status, "vaRenderPicture");
     va_status = vaRenderPicture(va_dpy,context_id, &iqmatrix_buf, 1);
-    CHECK_VASTATUS(va_status, "vaRenderPicture");
+    CHECK_VA_STATUS(va_status, "vaRenderPicture");
     va_status = vaRenderPicture(va_dpy,context_id, &slice_param_buf, 1);
-    CHECK_VASTATUS(va_status, "vaRenderPicture");
+    CHECK_VA_STATUS(va_status, "vaRenderPicture");
     va_status = vaRenderPicture(va_dpy,context_id, &slice_data_buf, 1);
-    CHECK_VASTATUS(va_status, "vaRenderPicture");
+    CHECK_VA_STATUS(va_status, "vaRenderPicture");
     va_status = vaEndPicture(va_dpy,context_id);
-    CHECK_VASTATUS(va_status, "vaEndPicture");
+    CHECK_VA_STATUS(va_status, "vaEndPicture");
 
     va_status = vaSyncSurface(va_dpy, surface_id[RT_ID]);
-    CHECK_VASTATUS(va_status, "vaSyncSurface");
+    CHECK_VA_STATUS(va_status, "vaSyncSurface");
 
     frame = surface_id[RT_ID];
 
-    if (dump_decode_output)
-    {
+    if (dump_decode_output) {
         VAImage output_image;
         va_status = vaDeriveImage(va_dpy, surface_id[RT_ID], &output_image);
-        CHECK_VASTATUS(va_status, "vaDeriveImage");
+        CHECK_VA_STATUS(va_status, "vaDeriveImage");
 
         void *out_buf = nullptr;
         va_status = vaMapBuffer(va_dpy, output_image.buf, &out_buf);
-        CHECK_VASTATUS(va_status, "vaMapBuffer");
+        CHECK_VA_STATUS(va_status, "vaMapBuffer");
 
         FILE *fp = fopen("out_224x224.nv12", "wb+");
         // dump y_plane
         char *y_buf = (char*)out_buf;
         int y_pitch = output_image.pitches[0];
-        for (size_t i = 0; i < CLIP_HEIGHT; i++)
-        {
+        for (size_t i = 0; i < CLIP_HEIGHT; i++) {
             fwrite(y_buf + y_pitch*i, CLIP_WIDTH, 1, fp);
         }
         // dump uv_plane
         char *uv_buf = (char*)out_buf + output_image.offsets[1];
         int uv_pitch = output_image.pitches[1];
-        for (size_t i = 0; i < CLIP_HEIGHT/2; i++)
-        {
+        for (size_t i = 0; i < CLIP_HEIGHT/2; i++) {
             fwrite(uv_buf + uv_pitch*i, CLIP_WIDTH, 1, fp);
         }
 
@@ -287,30 +202,28 @@ void printDesc(VADRMPRIMESurfaceDescriptor &prime_desc)
     printf("INFO: num_objects = %d\n", prime_desc.num_objects);
 
     int num_objects = prime_desc.num_objects > 4 ? 4: prime_desc.num_objects;
-    for (size_t i = 0; i < num_objects; i++)
-    {
-        printf("  INFO: dma_buf[%d] = %d\n", i, prime_desc.objects[i].fd);
-        printf("  INFO: size[%d] = %d\n", i, prime_desc.objects[i].size);
-        printf("  INFO: drm_format_modifier[%d] = %d\n", i, prime_desc.objects[i].drm_format_modifier);
+    for (size_t i = 0; i < num_objects; i++) {
+        printf("   dma_buf[%d] = %d\n", i, prime_desc.objects[i].fd);
+        printf("   size[%d] = %d\n", i, prime_desc.objects[i].size);
+        printf("   drm_format_modifier[%d] = %d\n", i, prime_desc.objects[i].drm_format_modifier);
     }
 
     int num_layers = prime_desc.num_layers > 4 ? 4: prime_desc.num_layers;
     printf("INFO: num_layers = %d\n", prime_desc.num_layers);
-    for (size_t i = 0; i < num_layers; i++)
-    {
-        printf("  INFO: drm_format[%d] = 0x%08x\n", i, prime_desc.layers[i].drm_format);
-        printf("  INFO: num_planes[%d] = %d\n", i, prime_desc.layers[i].num_planes);
-        printf("  INFO: object_index[%d] = %d, %d, %d, %d\n", i, 
+    for (size_t i = 0; i < num_layers; i++) {
+        printf("   drm_format[%d] = 0x%08x\n", i, prime_desc.layers[i].drm_format);
+        printf("   num_planes[%d] = %d\n", i, prime_desc.layers[i].num_planes);
+        printf("   object_index[%d] = %d, %d, %d, %d\n", i, 
             prime_desc.layers[i].object_index[0], 
             prime_desc.layers[i].object_index[1], 
             prime_desc.layers[i].object_index[2], 
             prime_desc.layers[i].object_index[3]);
-        printf("  INFO: offset[%d] = %d, %d, %d, %d\n", i, 
+        printf("   offset[%d] = %d, %d, %d, %d\n", i, 
             prime_desc.layers[i].offset[0], 
             prime_desc.layers[i].offset[1], 
             prime_desc.layers[i].offset[2], 
             prime_desc.layers[i].offset[3]);
-        printf("  INFO: pitch[%d] = %d, %d, %d, %d\n", i, 
+        printf("   pitch[%d] = %d, %d, %d, %d\n", i, 
             prime_desc.layers[i].pitch[0], 
             prime_desc.layers[i].pitch[1], 
             prime_desc.layers[i].pitch[2], 
@@ -340,6 +253,91 @@ int readKernel(vector<char>& binary)
     return -1;
 }
 
+inline ze_device_handle_t findDevice(
+    ze_driver_handle_t pDriver,
+    ze_device_type_t type)
+{
+    // get all devices
+    uint32_t deviceCount = 0;
+    zeDeviceGet(pDriver, &deviceCount, nullptr);
+
+    std::vector<ze_device_handle_t> devices(deviceCount);
+    zeDeviceGet(pDriver, &deviceCount, devices.data());
+
+    ze_device_handle_t found = nullptr;
+
+    // for each device, find the first one matching the type
+    for(uint32_t device = 0; device < deviceCount; ++device) {
+        auto phDevice = devices[device];
+
+        ze_device_properties_t device_properties = {};
+        device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+        zeDeviceGetProperties(phDevice, &device_properties);
+
+        if(type == device_properties.type) {
+            found = phDevice;
+
+            ze_driver_properties_t driver_properties = {};
+            driver_properties.stype = ZE_STRUCTURE_TYPE_DRIVER_PROPERTIES;
+            zeDriverGetProperties(pDriver, &driver_properties);
+
+            //std::cout << "Found "<< to_string(type) << " device..." << "\n";
+            //std::cout << "Driver version: " << driver_properties.driverVersion << "\n";
+
+            ze_api_version_t version = {};
+            zeDriverGetApiVersion(pDriver, &version);
+            //std::cout << "API version: " << to_string(version) << "\n";
+
+            //std::cout << to_string(device_properties) << "\n";
+
+            ze_device_compute_properties_t compute_properties = {};
+            compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
+            zeDeviceGetComputeProperties(phDevice, &compute_properties);
+            //std::cout << to_string(compute_properties) << "\n";
+
+            uint32_t memoryCount = 0;
+            zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
+            auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
+            for( uint32_t mem = 0; mem < memoryCount; ++mem ) {
+                pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
+                pMemoryProperties[mem].pNext = nullptr;
+            }
+            zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
+            for( uint32_t mem = 0; mem < memoryCount; ++mem ) {
+                //std::cout << to_string( pMemoryProperties[ mem ] ) << "\n";
+            }
+            delete[] pMemoryProperties;
+
+            ze_device_memory_access_properties_t memory_access_properties = {};
+            memory_access_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_ACCESS_PROPERTIES;
+            zeDeviceGetMemoryAccessProperties(phDevice, &memory_access_properties);
+            //std::cout << to_string( memory_access_properties ) << "\n";
+
+            uint32_t cacheCount = 0;
+            zeDeviceGetCacheProperties(phDevice, &cacheCount, nullptr );
+            auto pCacheProperties = new ze_device_cache_properties_t[cacheCount];
+            for( uint32_t cache = 0; cache < cacheCount; ++cache ) {
+                pCacheProperties[cache].stype = ZE_STRUCTURE_TYPE_DEVICE_CACHE_PROPERTIES;
+                pCacheProperties[cache].pNext = nullptr;
+            }
+            zeDeviceGetCacheProperties(phDevice, &cacheCount, pCacheProperties);
+            for( uint32_t cache = 0; cache < cacheCount; ++cache ) {
+                //std::cout << to_string( pCacheProperties[ cache ] ) << "\n";
+            }
+            delete[] pCacheProperties;
+
+            ze_device_image_properties_t image_properties = {};
+            image_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_IMAGE_PROPERTIES;
+            zeDeviceGetImageProperties(phDevice, &image_properties);
+            //std::cout << to_string( image_properties ) << "\n";
+
+            break;
+        }
+    }
+
+    return found;
+}
+
 int main() 
 {
     ze_result_t result;
@@ -362,37 +360,24 @@ int main()
 
     VADRMPRIMESurfaceDescriptor prime_desc = {};
     va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
-    if (va_status != VA_STATUS_SUCCESS) {
-        printf("ERROR: vaExportSurfaceHandle failed!\n");
-        return -1;
-    }
+    CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
     printDesc(prime_desc);
 
     int dma_buf_fd = prime_desc.objects[0].fd;
     uint32_t surf_size = prime_desc.objects[0].size;
     uint32_t surf_pitch = prime_desc.layers[0].pitch[0];
-    
 
     result = zeInit(0);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeInit failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeInit");
 
     uint32_t driverCount = 0;
     result = zeDriverGet(&driverCount, nullptr);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeDriverGet Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeDriverGet");
     printf("INFO: driver count = %d\n", driverCount);
 
     std::vector<ze_driver_handle_t> drivers(driverCount);
     result = zeDriverGet( &driverCount, drivers.data() );
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeDriverGet Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeDriverGet");
 
     for( uint32_t driver = 0; driver < driverCount; ++driver ) {
         pDriver = drivers[driver];
@@ -413,10 +398,7 @@ int main()
     ze_context_desc_t context_desc = {};
     context_desc.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC;
     result = zeContextCreate(pDriver, &context_desc, &context);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeContextCreate Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeContextCreate");
 
     // Create module
     vector<char> kernel_binary;
@@ -431,10 +413,7 @@ int main()
     module_desc.pInputModule = reinterpret_cast<const uint8_t *>(kernel_binary.data());
     module_desc.pBuildFlags = nullptr;
     result = zeModuleCreate(context, pDevice, &module_desc, &module, nullptr);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeModuleCreate Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeModuleCreate");
 
     // Create kernel
     ze_kernel_handle_t function = nullptr;
@@ -444,16 +423,10 @@ int main()
     function_desc.flags = 0;
     function_desc.pKernelName = kernel_func_name;
     result = zeKernelCreate(module, &function_desc, &function);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeKernelCreate Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeKernelCreate");
 
     result = zeKernelSetGroupSize(function, 1, 1, 1);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeKernelSetGroupSize Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
 
     size_t size = 256;
     size_t alignment = 1024;
@@ -467,22 +440,14 @@ int main()
     host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
     host_desc.flags = 0;
     result = zeMemAllocShared(context, &device_desc, &host_desc, size, alignment, pDevice, &memory);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeMemAllocShared Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeMemAllocShared");
 
     result = zeKernelSetArgumentValue(function, 0, sizeof(memory), &memory);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeKernelSetArgumentValue Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+
     const int addval = 10;
     result = zeKernelSetArgumentValue(function, 1, sizeof(addval), &addval);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeKernelSetArgumentValue Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
 
     // Create an immediate command list
     ze_command_list_handle_t commandlist = nullptr;
@@ -495,17 +460,14 @@ int main()
     queue_desc.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
     queue_desc.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
     result = zeCommandListCreateImmediate(context, pDevice, &queue_desc, &commandlist);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeKernelSetGroupSize Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeCommandListCreateImmediate");
 
     // Immediately submit a kernel to the device
     //zeCommandListAppendLaunchKernel(hCommandList, hKernel, &launchArgs, nullptr, 0, nullptr);
 
 
 
-#if 0
+#if 1
     // Set up the request to import the external memory handle
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -522,16 +484,19 @@ int main()
         0  // ordinal
     };
 
-    size_t size = surf_size;
-    size_t alignment = 4*1024;
+    size = surf_size;
+    alignment = 4*1024;
     void* ptr = nullptr;
     // Link the request into the allocation descriptor and allocate
     alloc_desc.pNext = &import_fd;
     result = zeMemAllocDevice(context, &alloc_desc, size, alignment, pDevice, &ptr);
-    if(result != ZE_RESULT_SUCCESS) {
-        printf("ERROR: zeMemAllocDevice Failed with return code: 0x%08x\n", result);
-        return -1;
-    }
+    CHECK_ZE_STATUS(result, "zeMemAllocDevice");
+
+    ze_memory_allocation_properties_t props = {};
+    result = zeMemGetAllocProperties(context, ptr, &props, nullptr);
+    CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
+    printf("MemAllocINFO: stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
+
 #endif
 
     zeContextDestroy(context);
