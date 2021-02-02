@@ -367,6 +367,8 @@ int main()
     uint32_t surf_size = prime_desc.objects[0].size;
     uint32_t surf_pitch = prime_desc.layers[0].pitch[0];
 
+    size_t size = 0;
+    size_t alignment = 0;
     result = zeInit(0);
     CHECK_ZE_STATUS(result, "zeInit");
 
@@ -400,6 +402,7 @@ int main()
     result = zeContextCreate(pDriver, &context_desc, &context);
     CHECK_ZE_STATUS(result, "zeContextCreate");
 
+#if 0
     // Create module
     vector<char> kernel_binary;
     if (readKernel(kernel_binary) != 0)
@@ -428,8 +431,8 @@ int main()
     result = zeKernelSetGroupSize(function, 1, 1, 1);
     CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
 
-    size_t size = 256;
-    size_t alignment = 1024;
+    size = 256;
+    alignment = 1024;
     void *memory = nullptr;
     ze_device_mem_alloc_desc_t device_desc = {};
     device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
@@ -448,24 +451,33 @@ int main()
     const int addval = 10;
     result = zeKernelSetArgumentValue(function, 1, sizeof(addval), &addval);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+#endif
 
-    // Create an immediate command list
-    ze_command_list_handle_t commandlist = nullptr;
-    ze_command_queue_desc_t queue_desc = {};
-    queue_desc.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
-    queue_desc.pNext = nullptr;
-    queue_desc.ordinal = 0;
-    queue_desc.index = 0;
-    queue_desc.flags = 0;
-    queue_desc.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
-    queue_desc.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
-    result = zeCommandListCreateImmediate(context, pDevice, &queue_desc, &commandlist);
-    CHECK_ZE_STATUS(result, "zeCommandListCreateImmediate");
+    // Create command list
+    ze_command_list_handle_t command_list = nullptr;
+    ze_command_list_desc_t descriptor_cmdlist = {};
+    descriptor_cmdlist.stype = ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC;
+    descriptor_cmdlist.pNext = nullptr;
+    descriptor_cmdlist.flags = 0;
+    descriptor_cmdlist.commandQueueGroupOrdinal = 0;
+    result = zeCommandListCreate(context, pDevice, &descriptor_cmdlist, &command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListCreate");
 
-    // Immediately submit a kernel to the device
-    //zeCommandListAppendLaunchKernel(hCommandList, hKernel, &launchArgs, nullptr, 0, nullptr);
-
-
+    // Create command queue
+    ze_command_queue_handle_t command_queue = nullptr;
+    ze_command_queue_desc_t descriptor_cmdqueue = {};
+    descriptor_cmdqueue.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
+    descriptor_cmdqueue.pNext = nullptr;
+    descriptor_cmdqueue.flags = 0;
+    descriptor_cmdqueue.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
+    descriptor_cmdqueue.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
+    descriptor_cmdqueue.ordinal = 0;
+    descriptor_cmdqueue.index = 0;
+    ze_device_properties_t properties = {};
+    result = zeDeviceGetProperties(pDevice, &properties);
+    CHECK_ZE_STATUS(result, "zeDeviceGetProperties");
+    result = zeCommandQueueCreate(context, pDevice, &descriptor_cmdqueue, &command_queue);
+    CHECK_ZE_STATUS(result, "zeCommandQueueCreate");
 
 #if 1
     // Set up the request to import the external memory handle
@@ -486,19 +498,43 @@ int main()
 
     size = surf_size;
     alignment = 4*1024;
-    void* ptr = nullptr;
+    void* src_ptr = nullptr;
     // Link the request into the allocation descriptor and allocate
     alloc_desc.pNext = &import_fd;
-    result = zeMemAllocDevice(context, &alloc_desc, size, alignment, pDevice, &ptr);
+    result = zeMemAllocDevice(context, &alloc_desc, size, alignment, pDevice, &src_ptr);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
-
     ze_memory_allocation_properties_t props = {};
-    result = zeMemGetAllocProperties(context, ptr, &props, nullptr);
+    result = zeMemGetAllocProperties(context, src_ptr, &props, nullptr);
     CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
-    printf("MemAllocINFO: stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
-
+    printf("MemAllocINFO: memory = 0x%08x, stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", 
+        src_ptr, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
 #endif
 
+    const size_t buf_size = 1 * 1024 * 1024;
+    std::vector<uint8_t> host_dst(buf_size, 0);
+
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), src_ptr, surf_size, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
+
+    result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    result = zeCommandListClose(command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListClose");
+
+    result = zeCommandQueueExecuteCommandLists(command_queue, 1, &command_list, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandQueueExecuteCommandLists");
+
+    result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
+    CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
+
+    printf("\n");
+    for (size_t i = 0; i < 256; i++)
+    {
+        printf("%d, ", host_dst[i]);
+    }
+    printf("\n");
+    
     zeContextDestroy(context);
 
     printf("done\n");
