@@ -568,24 +568,27 @@ int main()
         0  // ordinal
     };
 
-    size = surf_size;
-    alignment = 4*1024;
-    void* src_ptr = nullptr;
+    void* shared_fd_mem = nullptr;
     // Link the request into the allocation descriptor and allocate
     alloc_desc.pNext = &import_fd;
-    result = zeMemAllocDevice(context, &alloc_desc, size, alignment, pDevice, &src_ptr);
+    result = zeMemAllocDevice(context, &alloc_desc, surf_size, 1, pDevice, &shared_fd_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
     ze_memory_allocation_properties_t props = {};
-    result = zeMemGetAllocProperties(context, src_ptr, &props, nullptr);
+    result = zeMemGetAllocProperties(context, shared_fd_mem, &props, nullptr);
     CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
     printf("MemAllocINFO: memory = 0x%08x, stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", 
-        src_ptr, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
+        shared_fd_mem, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
+#endif
 
     void* tmp_mem = nullptr;
-    alloc_desc.pNext = nullptr;
-    result = zeMemAllocDevice(context, &alloc_desc, 1*1024*1024, 1, pDevice, &tmp_mem);
+    ze_device_mem_alloc_desc_t tmp_desc = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        nullptr,
+        0, // flags
+        0  // ordinal
+    };
+    result = zeMemAllocDevice(context, &tmp_desc, 1*1024*1024, 1, pDevice, &tmp_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
-#endif
 
     const size_t buf_size = 1 * 1024;
     std::vector<uint8_t> host_src(buf_size, 0);
@@ -618,14 +621,23 @@ int main()
     result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
     CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
 
-    printf("\n");
-    for (size_t i = 0; i < 256; i++)
+    bool copy_passed = true;
+    for (size_t i = 0; i < buf_size; i++)
     {
-        printf("%d, ", host_dst[i]);
+        if (host_dst[i] != (i%256))
+        {
+            copy_passed = false;
+            break;
+        }
     }
-    printf("\n");
+    if (copy_passed)
+        printf("INFO: ================ Copy test passed ================ \n");
+    else
+        printf("INFO: !!!!!!!!!!!!!!!! Copy test failed !!!!!!!!!!!!!!!! \n");
+    
+    memset(host_dst.data(), 0, host_dst.size());
 
-    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), src_ptr, buf_size, nullptr, 0, nullptr);
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), shared_fd_mem, buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
 
     result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
