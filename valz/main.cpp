@@ -194,6 +194,76 @@ int decodeFrame(VASurfaceID& frame)
     return 0;
 }
 
+void printVAImage(VAImage &img)
+{
+    printf("\nVAImage: ================\n");
+    printf("VAImage: image_id = %d\n", img.image_id);
+    printf("VAImage: buf_id   = %d\n", img.buf);
+    printf("VAImage: format: \n");
+    printf("            fourcc         = 0x%08x\n", img.format.fourcc);
+    printf("            byte_order     = %d\n", img.format.byte_order);
+    printf("            bits_per_pixel = %d\n", img.format.bits_per_pixel);
+    printf("            depth          = %d\n", img.format.depth);
+    printf("            red_mask       = %d\n", img.format.red_mask);
+    printf("            green_mask     = %d\n", img.format.green_mask);
+    printf("            blue_mask      = %d\n", img.format.blue_mask);
+    printf("            alpha_mask     = %d\n", img.format.alpha_mask);
+    printf("VAImage: width = %d\n", img.width);
+    printf("VAImage: height = %d\n", img.height);
+    printf("VAImage: data_size = %d\n", img.data_size);
+    printf("VAImage: num_planes = %d\n", img.num_planes);
+    printf("VAImage: pitches = [%d, %d, %d]\n", img.pitches[0], img.pitches[1], img.pitches[2]);
+    printf("VAImage: offsets = [%d, %d, %d]\n", img.offsets[0], img.offsets[1], img.offsets[2]);
+    printf("VAImage: num_palette_entries = %d\n", img.num_palette_entries);
+    printf("VAImage: entry_bytes = %d\n", img.entry_bytes);
+    printf("VAImage: component_order = [%d, %d, %d, %d]\n", img.component_order[0], img.component_order[1], img.component_order[2], img.component_order[3]);
+    printf("VAImage: ================\n");
+}
+
+void printSurface(VASurfaceID frame)
+{
+    VAStatus va_status;
+    VAImage va_img = {};
+    void *surf_ptr = nullptr;
+
+    va_status = vaDeriveImage(va_dpy, frame, &va_img);
+    CHECK_VA_STATUS(va_status, "vaDeriveImage");
+    uint16_t w = va_img.width;
+    uint16_t h = va_img.height;
+    uint32_t pitch = va_img.pitches[0];
+    uint32_t uv_offset = va_img.offsets[1];
+    printVAImage(va_img);
+    
+    va_status = vaMapBuffer(va_dpy, va_img.buf, &surf_ptr);
+    CHECK_VA_STATUS(va_status, "vaMapBuffer");
+
+    char* src = (char*)surf_ptr;
+    vector<char> dst(w*h*3/2, 0);
+
+    // Y plane
+    for (size_t i = 0; i < h; i++)
+        memcpy(dst.data()+i*w, src+i*pitch, w);
+    // UV plane
+    for (size_t i = 0; i < h/2; i++)
+        memcpy(dst.data()+(h+i)*w, src+uv_offset+i*pitch, w);
+
+    FILE* fp = fopen("dec_out.nv12", "wb");
+    fwrite(dst.data(), w*h*3/2, 1, fp);
+    fclose(fp);
+
+    // ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i dec_out.nv12 dec_out.bmp -y
+
+    printf("\n");
+    for (size_t i = 0; i < 256; i++)
+    {
+        printf("%d, ", (uint8_t)dst[i]);
+    }
+    printf("\n");
+
+    vaUnmapBuffer(va_dpy, va_img.buf);
+    vaDestroyImage(va_dpy, va_img.image_id);
+}
+
 void printDesc(VADRMPRIMESurfaceDescriptor &prime_desc)
 {
     printf("INFO: width = %d\n", prime_desc.width);
@@ -358,6 +428,8 @@ int main()
         return -1;
     }
 
+    printSurface(va_frame);
+
     VADRMPRIMESurfaceDescriptor prime_desc = {};
     va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
     CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
@@ -508,12 +580,52 @@ int main()
     CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
     printf("MemAllocINFO: memory = 0x%08x, stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", 
         src_ptr, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
+
+    void* tmp_mem = nullptr;
+    alloc_desc.pNext = nullptr;
+    result = zeMemAllocDevice(context, &alloc_desc, 1*1024*1024, 1, pDevice, &tmp_mem);
+    CHECK_ZE_STATUS(result, "zeMemAllocDevice");
 #endif
 
-    const size_t buf_size = 1 * 1024 * 1024;
+    const size_t buf_size = 1 * 1024;
+    std::vector<uint8_t> host_src(buf_size, 0);
     std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
+    {
+        host_src[i] = i % 256;
+    }
 
-    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), src_ptr, surf_size, nullptr, 0, nullptr);
+    // host_src --> tmp_mem
+    result = zeCommandListAppendMemoryCopy(command_list, tmp_mem, host_src.data(), buf_size, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
+
+    result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    // tmp_mem --> host_dst
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), tmp_mem , buf_size, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
+
+    result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    result = zeCommandListClose(command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListClose");
+
+    result = zeCommandQueueExecuteCommandLists(command_queue, 1, &command_list, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandQueueExecuteCommandLists");
+
+    result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
+    CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
+
+    printf("\n");
+    for (size_t i = 0; i < 256; i++)
+    {
+        printf("%d, ", host_dst[i]);
+    }
+    printf("\n");
+
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), src_ptr, buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
 
     result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
