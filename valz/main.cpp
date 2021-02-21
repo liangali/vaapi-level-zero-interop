@@ -31,6 +31,9 @@ const char* kernel_func_name = "cmdlist_add_constant";
 VADisplay va_dpy = NULL;
 int va_fd = -1;
 bool dump_decode_output = false;
+const size_t dec_pitch = ((CLIP_WIDTH + 255)/256) * 256;
+const size_t y_plane_size = CLIP_WIDTH*CLIP_HEIGHT; 
+uint8_t dec_yuv_ref[y_plane_size] = {};
 
 #define CHECK_VA_STATUS(va_status, func)                                    \
 if (va_status != VA_STATUS_SUCCESS) {                                     \
@@ -183,7 +186,7 @@ int decodeFrame(VASurfaceID& frame)
         }
 
         // use below command line to convert nv12 surface as bmp image
-        /* ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i out.nv12 out.bmp */
+        // ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i dec_out.nv12 -y out.bmp
 
         fclose(fp);
     }
@@ -252,11 +255,12 @@ void printSurface(VASurfaceID frame)
     fclose(fp);
 
     // ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i dec_out.nv12 dec_out.bmp -y
-
     printf("\n");
-    for (size_t i = 0; i < 256; i++)
+    for (size_t i = 0; i < y_plane_size; i++)
     {
-        printf("%d, ", (uint8_t)dst[i]);
+        if (i < 256)
+            printf("%d, ", (uint8_t)dst[i]);
+        dec_yuv_ref[i] = (uint8_t)dst[i];
     }
     printf("\n");
 
@@ -430,8 +434,14 @@ int main()
 
     printSurface(va_frame);
 
+    // 1. add meta data in API
+    // 2. put meta data in extra page
+    // 3. leverage i915 to query meta data from dma_buf
+    // 4. level zero call libva interface to get meta data
+
     VADRMPRIMESurfaceDescriptor prime_desc = {};
     va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
+    int dma_buf_fd = prime_desc.objects[0].fd;
     CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
     printDesc(prime_desc);
 
@@ -552,6 +562,7 @@ int main()
     CHECK_ZE_STATUS(result, "zeCommandQueueCreate");
 
 #if 1
+    // https://spec.oneapi.com/level-zero/latest/core/PROG.html#external-memory-import-and-export
     // Set up the request to import the external memory handle
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -573,6 +584,7 @@ int main()
     alloc_desc.pNext = &import_fd;
     result = zeMemAllocDevice(context, &alloc_desc, surf_size, 1, pDevice, &shared_fd_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
+
     ze_memory_allocation_properties_t props = {};
     result = zeMemGetAllocProperties(context, shared_fd_mem, &props, nullptr);
     CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
@@ -590,7 +602,7 @@ int main()
     result = zeMemAllocDevice(context, &tmp_desc, 1*1024*1024, 1, pDevice, &tmp_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
 
-    const size_t buf_size = 1 * 1024;
+    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
     std::vector<uint8_t> host_src(buf_size, 0);
     std::vector<uint8_t> host_dst(buf_size, 0);
     for (size_t i = 0; i < buf_size; i++)
@@ -598,6 +610,7 @@ int main()
         host_src[i] = i % 256;
     }
 
+#if 0
     // host_src --> tmp_mem
     result = zeCommandListAppendMemoryCopy(command_list, tmp_mem, host_src.data(), buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
@@ -606,7 +619,7 @@ int main()
     CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
 
     // tmp_mem --> host_dst
-    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), tmp_mem , buf_size, nullptr, 0, nullptr);
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), tmp_mem, buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
 
     result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
@@ -634,8 +647,14 @@ int main()
         printf("INFO: ================ Copy test passed ================ \n");
     else
         printf("INFO: !!!!!!!!!!!!!!!! Copy test failed !!!!!!!!!!!!!!!! \n");
-    
-    memset(host_dst.data(), 0, host_dst.size());
+#endif
+
+    // clean up host dst buffer
+    //memset(host_dst.data(), 0, host_dst.size());
+    for (size_t i = 0; i < host_dst.size(); i++)
+    {
+        host_dst[i] = 0;
+    }
 
     result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), shared_fd_mem, buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
@@ -653,11 +672,30 @@ int main()
     CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
 
     printf("\n");
-    for (size_t i = 0; i < 256; i++)
+    for (size_t i = 0; i < host_dst.size(); i++)
     {
-        printf("%d, ", host_dst[i]);
+        if (i < 256)
+        {
+            printf("%d, ", host_dst[i]);
+        }
     }
     printf("\n");
+
+    int mismatch_count = 0;
+    for (size_t i = 0; i < 256; i++)
+    {
+        if (host_dst[i] != dec_yuv_ref[i])
+        {
+            mismatch_count++;
+            //printf("WARNING: first mismatch detected at i = %d, cur = %d, ref = %d\n", i, host_dst[i], dec_yuv_ref[i]);
+        }
+    }
+    if (mismatch_count == 0)
+        printf("INFO: ================ surface sharing test passed ================ \n");
+    else
+        printf("INFO: !!!!!!!!!!!!!!!! surface sharing test failed, mismatch_count = %d !!!!!!!!!!!!!!!! \n", mismatch_count);
+
+
     
     zeContextDestroy(context);
 
