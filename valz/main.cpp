@@ -537,6 +537,7 @@ int initZe()
 
 int testCopyMem()
 {
+#if 1
     const size_t buf_size = 16*1024;
     std::vector<uint8_t> host_src(buf_size, 0);
     std::vector<uint8_t> host_dst(buf_size, 0);
@@ -545,7 +546,6 @@ int testCopyMem()
         host_src[i] = i % 256;
     }
 
-#if 1
     void* tmp_mem = nullptr;
     ze_device_mem_alloc_desc_t tmp_desc = {
         ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
@@ -682,8 +682,18 @@ int testBufferShare()
     return 0;
 }
 
-int main() 
+int testImageShare()
 {
+    return 0;
+}
+
+int main(int argc, char** argv) 
+{
+    int testid = 0;
+    if (argc >= 2) {
+        testid = atoi(argv[1]) >=0 ? atoi(argv[1]) : testid;
+    }
+
     VAStatus va_status;
     if (initVA()) {
         printf("ERROR: initVA failed!\n");
@@ -715,14 +725,25 @@ int main()
 
     initZe();
 
-    // test level-zero copy: host --> device --> host
-    // testCopyMem();
-
-    // test VASurface to level-zero buffer sharing
-    testBufferShare();
+    switch (testid)
+    {
+    case 0:
+        // test level-zero copy: host --> device --> host
+        testCopyMem();
+        break;
+    case 1:
+        // test media + level-zero buffer sharing, copy NV12 VASurface to level-zero buffer
+        testBufferShare();
+        break;
+    case 2:
+        // test media + level-zero image sharing, copy NV12 VASurface to level-zero image
+        testImageShare();
+        break;
+    default:
+        break;
+    }
 
     zeContextDestroy(context);
-
     printf("done\n");
     return 0;
 }
