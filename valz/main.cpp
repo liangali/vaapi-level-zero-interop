@@ -600,6 +600,14 @@ int testCopyMem()
 int testBufferShare()
 {
     // https://spec.oneapi.com/level-zero/latest/core/PROG.html#external-memory-import-and-export
+
+    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
+    {
+        host_dst[i] = 0;
+    }
+
     // Set up the request to import the external memory handle
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -615,13 +623,6 @@ int testBufferShare()
         0, // flags
         0  // ordinal
     };
-
-    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
-    std::vector<uint8_t> host_dst(buf_size, 0);
-    for (size_t i = 0; i < buf_size; i++)
-    {
-        host_dst[i] = 0;
-    }
 
     void* shared_fd_mem = nullptr;
     // Link the request into the allocation descriptor and allocate
@@ -684,6 +685,92 @@ int testBufferShare()
 
 int testImageShare()
 {
+    // https://one-api.gitlab-pages.devtools.intel.com/level_zero/core/api.html?highlight=ze_image_desc_t#_CPPv415ze_image_desc_t
+    
+    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
+    {
+        host_dst[i] = 0;
+    }
+
+    ze_external_memory_import_fd_t import_fd = {
+        ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
+        nullptr, // pNext
+        ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF,
+        dma_buf_fd
+    };
+
+    // allocate memory for results
+    ze_device_mem_alloc_desc_t alloc_desc = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        nullptr,
+        0, // flags
+        0  // ordinal
+    };
+
+    ze_image_desc_t image_description = {};
+    image_description.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
+    image_description.format.layout = ZE_IMAGE_FORMAT_LAYOUT_NV12;
+    image_description.pNext = &import_fd;
+    image_description.flags = ZE_IMAGE_FLAG_KERNEL_WRITE; //ZE_IMAGE_FLAG_BIAS_UNCACHED
+    image_description.type = ZE_IMAGE_TYPE_2D;
+    image_description.format.type = ZE_IMAGE_FORMAT_TYPE_UINT;
+    image_description.format.x = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.y = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.z = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.w = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.width = CLIP_WIDTH;
+    image_description.height = CLIP_HEIGHT;
+    image_description.depth = 1;
+    ze_image_handle_t shared_image = nullptr;
+    result = zeImageCreate(context, pDevice, &image_description, &shared_image);
+    CHECK_ZE_STATUS(result, "zeImageCreate");
+
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), shared_image, buf_size, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
+
+    result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    result = zeCommandListClose(command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListClose");
+
+    result = zeCommandQueueExecuteCommandLists(command_queue, 1, &command_list, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandQueueExecuteCommandLists");
+
+    result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
+    CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
+
+    printf("\n");
+    for (size_t i = 0; i < host_dst.size(); i++)
+    {
+        if (i < 256)
+        {
+            printf("%d, ", host_dst[i]);
+        }
+    }
+    printf("\n");
+
+    ofstream outfile;
+    outfile.open("lz_img_out.yuv", ios::binary);
+    outfile.write((const char*)host_dst.data(), host_dst.size());
+    outfile.flush();
+
+    int mismatch_count = 0;
+    for (size_t i = 0; i < 256; i++)
+    {
+        if (host_dst[i] != dec_yuv_ref[i])
+        {
+            mismatch_count++;
+        }
+    }
+
+    if (mismatch_count == 0)
+        printf("INFO: ================ surface sharing test passed ================ \n");
+    else
+        printf("INFO: !!!!!!!!!!!!!!!! surface sharing test failed, mismatch_count = %d !!!!!!!!!!!!!!!! \n", mismatch_count);
+
     return 0;
 }
 
