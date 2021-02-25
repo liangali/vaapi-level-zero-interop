@@ -441,13 +441,20 @@ int main()
 
     VADRMPRIMESurfaceDescriptor prime_desc = {};
     va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
-    int dma_buf_fd = prime_desc.objects[0].fd;
     CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
     printDesc(prime_desc);
 
     int dma_buf_fd = prime_desc.objects[0].fd;
     uint32_t surf_size = prime_desc.objects[0].size;
     uint32_t surf_pitch = prime_desc.layers[0].pitch[0];
+
+    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
+    std::vector<uint8_t> host_src(buf_size, 0);
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
+    {
+        host_src[i] = i % 256;
+    }
 
     size_t size = 0;
     size_t alignment = 0;
@@ -582,7 +589,7 @@ int main()
     void* shared_fd_mem = nullptr;
     // Link the request into the allocation descriptor and allocate
     alloc_desc.pNext = &import_fd;
-    result = zeMemAllocDevice(context, &alloc_desc, surf_size, 1, pDevice, &shared_fd_mem);
+    result = zeMemAllocDevice(context, &alloc_desc, buf_size, 1, pDevice, &shared_fd_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
 
     ze_memory_allocation_properties_t props = {};
@@ -592,6 +599,7 @@ int main()
         shared_fd_mem, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
 #endif
 
+#if 0
     void* tmp_mem = nullptr;
     ze_device_mem_alloc_desc_t tmp_desc = {
         ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
@@ -602,15 +610,6 @@ int main()
     result = zeMemAllocDevice(context, &tmp_desc, 1*1024*1024, 1, pDevice, &tmp_mem);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
 
-    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
-    std::vector<uint8_t> host_src(buf_size, 0);
-    std::vector<uint8_t> host_dst(buf_size, 0);
-    for (size_t i = 0; i < buf_size; i++)
-    {
-        host_src[i] = i % 256;
-    }
-
-#if 0
     // host_src --> tmp_mem
     result = zeCommandListAppendMemoryCopy(command_list, tmp_mem, host_src.data(), buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
@@ -680,6 +679,11 @@ int main()
         }
     }
     printf("\n");
+
+    ofstream outfile;
+    outfile.open("lz_out.yuv", ios::binary);
+    outfile.write((const char*)host_dst.data(), host_dst.size());
+    outfile.flush();
 
     int mismatch_count = 0;
     for (size_t i = 0; i < 256; i++)
