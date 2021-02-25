@@ -412,50 +412,17 @@ inline ze_device_handle_t findDevice(
     return found;
 }
 
-int main() 
+ze_result_t result;
+const ze_device_type_t type = ZE_DEVICE_TYPE_GPU;
+ze_driver_handle_t pDriver = nullptr;
+ze_device_handle_t pDevice = nullptr;
+ze_context_handle_t context;
+ze_command_list_handle_t command_list = nullptr;
+ze_command_queue_handle_t command_queue = nullptr;
+int dma_buf_fd = 0;
+
+int initZe()
 {
-    ze_result_t result;
-    const ze_device_type_t type = ZE_DEVICE_TYPE_GPU;
-    ze_driver_handle_t pDriver = nullptr;
-    ze_device_handle_t pDevice = nullptr;
-
-    VAStatus va_status;
-    if (initVA()) {
-        printf("ERROR: initVA failed!\n");
-        return -1;
-    }
-
-    // get NV12 surface from HW decode output
-    VASurfaceID va_frame;
-    if(decodeFrame(va_frame)) {
-        printf("ERROR: decode failed\n");
-        return -1;
-    }
-
-    printSurface(va_frame);
-
-    // 1. add meta data in API
-    // 2. put meta data in extra page
-    // 3. leverage i915 to query meta data from dma_buf
-    // 4. level zero call libva interface to get meta data
-
-    VADRMPRIMESurfaceDescriptor prime_desc = {};
-    va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
-    CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
-    printDesc(prime_desc);
-
-    int dma_buf_fd = prime_desc.objects[0].fd;
-    uint32_t surf_size = prime_desc.objects[0].size;
-    uint32_t surf_pitch = prime_desc.layers[0].pitch[0];
-
-    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
-    std::vector<uint8_t> host_src(buf_size, 0);
-    std::vector<uint8_t> host_dst(buf_size, 0);
-    for (size_t i = 0; i < buf_size; i++)
-    {
-        host_src[i] = i % 256;
-    }
-
     size_t size = 0;
     size_t alignment = 0;
     result = zeInit(0);
@@ -485,11 +452,34 @@ int main()
     }
 
     // Create the context
-    ze_context_handle_t context;
     ze_context_desc_t context_desc = {};
     context_desc.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC;
     result = zeContextCreate(pDriver, &context_desc, &context);
     CHECK_ZE_STATUS(result, "zeContextCreate");
+
+    // Create command list
+    ze_command_list_desc_t descriptor_cmdlist = {};
+    descriptor_cmdlist.stype = ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC;
+    descriptor_cmdlist.pNext = nullptr;
+    descriptor_cmdlist.flags = 0;
+    descriptor_cmdlist.commandQueueGroupOrdinal = 0;
+    result = zeCommandListCreate(context, pDevice, &descriptor_cmdlist, &command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListCreate");
+
+    // Create command queue
+    ze_command_queue_desc_t descriptor_cmdqueue = {};
+    descriptor_cmdqueue.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
+    descriptor_cmdqueue.pNext = nullptr;
+    descriptor_cmdqueue.flags = 0;
+    descriptor_cmdqueue.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
+    descriptor_cmdqueue.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
+    descriptor_cmdqueue.ordinal = 0;
+    descriptor_cmdqueue.index = 0;
+    ze_device_properties_t properties = {};
+    result = zeDeviceGetProperties(pDevice, &properties);
+    CHECK_ZE_STATUS(result, "zeDeviceGetProperties");
+    result = zeCommandQueueCreate(context, pDevice, &descriptor_cmdqueue, &command_queue);
+    CHECK_ZE_STATUS(result, "zeCommandQueueCreate");
 
 #if 0
     // Create module
@@ -542,64 +532,20 @@ int main()
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
 #endif
 
-    // Create command list
-    ze_command_list_handle_t command_list = nullptr;
-    ze_command_list_desc_t descriptor_cmdlist = {};
-    descriptor_cmdlist.stype = ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC;
-    descriptor_cmdlist.pNext = nullptr;
-    descriptor_cmdlist.flags = 0;
-    descriptor_cmdlist.commandQueueGroupOrdinal = 0;
-    result = zeCommandListCreate(context, pDevice, &descriptor_cmdlist, &command_list);
-    CHECK_ZE_STATUS(result, "zeCommandListCreate");
+    return 0;
+}
 
-    // Create command queue
-    ze_command_queue_handle_t command_queue = nullptr;
-    ze_command_queue_desc_t descriptor_cmdqueue = {};
-    descriptor_cmdqueue.stype = ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC;
-    descriptor_cmdqueue.pNext = nullptr;
-    descriptor_cmdqueue.flags = 0;
-    descriptor_cmdqueue.mode = ZE_COMMAND_QUEUE_MODE_DEFAULT;
-    descriptor_cmdqueue.priority = ZE_COMMAND_QUEUE_PRIORITY_NORMAL;
-    descriptor_cmdqueue.ordinal = 0;
-    descriptor_cmdqueue.index = 0;
-    ze_device_properties_t properties = {};
-    result = zeDeviceGetProperties(pDevice, &properties);
-    CHECK_ZE_STATUS(result, "zeDeviceGetProperties");
-    result = zeCommandQueueCreate(context, pDevice, &descriptor_cmdqueue, &command_queue);
-    CHECK_ZE_STATUS(result, "zeCommandQueueCreate");
+int testCopyMem()
+{
+    const size_t buf_size = 16*1024;
+    std::vector<uint8_t> host_src(buf_size, 0);
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
+    {
+        host_src[i] = i % 256;
+    }
 
 #if 1
-    // https://spec.oneapi.com/level-zero/latest/core/PROG.html#external-memory-import-and-export
-    // Set up the request to import the external memory handle
-    ze_external_memory_import_fd_t import_fd = {
-        ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
-        nullptr, // pNext
-        ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF,
-        dma_buf_fd
-    };
-
-    // allocate memory for results
-    ze_device_mem_alloc_desc_t alloc_desc = {
-        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
-        nullptr,
-        0, // flags
-        0  // ordinal
-    };
-
-    void* shared_fd_mem = nullptr;
-    // Link the request into the allocation descriptor and allocate
-    alloc_desc.pNext = &import_fd;
-    result = zeMemAllocDevice(context, &alloc_desc, buf_size, 1, pDevice, &shared_fd_mem);
-    CHECK_ZE_STATUS(result, "zeMemAllocDevice");
-
-    ze_memory_allocation_properties_t props = {};
-    result = zeMemGetAllocProperties(context, shared_fd_mem, &props, nullptr);
-    CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
-    printf("MemAllocINFO: memory = 0x%08x, stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", 
-        shared_fd_mem, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
-#endif
-
-#if 0
     void* tmp_mem = nullptr;
     ze_device_mem_alloc_desc_t tmp_desc = {
         ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
@@ -643,17 +589,51 @@ int main()
         }
     }
     if (copy_passed)
-        printf("INFO: ================ Copy test passed ================ \n");
+        printf("INFO: ================ level-zero copy test passed ================ \n");
     else
-        printf("INFO: !!!!!!!!!!!!!!!! Copy test failed !!!!!!!!!!!!!!!! \n");
+        printf("INFO: !!!!!!!!!!!!!!!! level-zero copy test failed !!!!!!!!!!!!!!!! \n");
 #endif
 
-    // clean up host dst buffer
-    //memset(host_dst.data(), 0, host_dst.size());
-    for (size_t i = 0; i < host_dst.size(); i++)
+    return 0;
+}
+
+int testBufferShare()
+{
+    // https://spec.oneapi.com/level-zero/latest/core/PROG.html#external-memory-import-and-export
+    // Set up the request to import the external memory handle
+    ze_external_memory_import_fd_t import_fd = {
+        ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
+        nullptr, // pNext
+        ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF,
+        dma_buf_fd
+    };
+
+    // allocate memory for results
+    ze_device_mem_alloc_desc_t alloc_desc = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        nullptr,
+        0, // flags
+        0  // ordinal
+    };
+
+    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    for (size_t i = 0; i < buf_size; i++)
     {
         host_dst[i] = 0;
     }
+
+    void* shared_fd_mem = nullptr;
+    // Link the request into the allocation descriptor and allocate
+    alloc_desc.pNext = &import_fd;
+    result = zeMemAllocDevice(context, &alloc_desc, buf_size, 1, pDevice, &shared_fd_mem);
+    CHECK_ZE_STATUS(result, "zeMemAllocDevice");
+
+    ze_memory_allocation_properties_t props = {};
+    result = zeMemGetAllocProperties(context, shared_fd_mem, &props, nullptr);
+    CHECK_ZE_STATUS(result, "zeMemGetAllocProperties");
+    printf("MemAllocINFO: memory = 0x%08x, stype = %d, pNext = 0x%08x, type = %d, id = 0x%08x, pagesize = %d\n", 
+        shared_fd_mem, props.stype, (uint64_t)props.pNext, props.type, props.id, props.pageSize);
 
     result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), shared_fd_mem, buf_size, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
@@ -691,16 +671,56 @@ int main()
         if (host_dst[i] != dec_yuv_ref[i])
         {
             mismatch_count++;
-            //printf("WARNING: first mismatch detected at i = %d, cur = %d, ref = %d\n", i, host_dst[i], dec_yuv_ref[i]);
         }
     }
+
     if (mismatch_count == 0)
         printf("INFO: ================ surface sharing test passed ================ \n");
     else
         printf("INFO: !!!!!!!!!!!!!!!! surface sharing test failed, mismatch_count = %d !!!!!!!!!!!!!!!! \n", mismatch_count);
 
+    return 0;
+}
 
-    
+int main() 
+{
+    VAStatus va_status;
+    if (initVA()) {
+        printf("ERROR: initVA failed!\n");
+        return -1;
+    }
+
+    // get NV12 surface from HW decode output
+    VASurfaceID va_frame;
+    if(decodeFrame(va_frame)) {
+        printf("ERROR: decode failed\n");
+        return -1;
+    }
+
+    printSurface(va_frame);
+
+    // 1. add meta data in API
+    // 2. put meta data in extra page
+    // 3. leverage i915 to query meta data from dma_buf
+    // 4. level zero call libva interface to get meta data
+
+    VADRMPRIMESurfaceDescriptor prime_desc = {};
+    va_status = vaExportSurfaceHandle(va_dpy, va_frame, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_READ_WRITE | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &prime_desc);
+    CHECK_VA_STATUS(va_status, "vaExportSurfaceHandle");
+    printDesc(prime_desc);
+
+    dma_buf_fd = prime_desc.objects[0].fd;
+    uint32_t surf_size = prime_desc.objects[0].size;
+    uint32_t surf_pitch = prime_desc.layers[0].pitch[0];
+
+    initZe();
+
+    // test level-zero copy: host --> device --> host
+    // testCopyMem();
+
+    // test VASurface to level-zero buffer sharing
+    testBufferShare();
+
     zeContextDestroy(context);
 
     printf("done\n");
