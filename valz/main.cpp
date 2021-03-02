@@ -34,6 +34,7 @@ bool dump_decode_output = false;
 const size_t dec_pitch = ((CLIP_WIDTH + 255)/256) * 256;
 const size_t y_plane_size = CLIP_WIDTH*CLIP_HEIGHT; 
 uint8_t dec_yuv_ref[y_plane_size] = {};
+size_t surface_size = 0;
 
 #define CHECK_VA_STATUS(va_status, func)                                    \
 if (va_status != VA_STATUS_SUCCESS) {                                     \
@@ -231,10 +232,13 @@ void printSurface(VASurfaceID frame)
 
     va_status = vaDeriveImage(va_dpy, frame, &va_img);
     CHECK_VA_STATUS(va_status, "vaDeriveImage");
+
     uint16_t w = va_img.width;
     uint16_t h = va_img.height;
     uint32_t pitch = va_img.pitches[0];
     uint32_t uv_offset = va_img.offsets[1];
+    surface_size = va_img.data_size;
+
     printVAImage(va_img);
     
     va_status = vaMapBuffer(va_dpy, va_img.buf, &surf_ptr);
@@ -687,12 +691,8 @@ int testImageShare()
 {
     // https://one-api.gitlab-pages.devtools.intel.com/level_zero/core/api.html?highlight=ze_image_desc_t#_CPPv415ze_image_desc_t
     
-    const size_t buf_size = dec_pitch * CLIP_HEIGHT;
+    const size_t buf_size = surface_size; //dec_pitch * CLIP_HEIGHT;
     std::vector<uint8_t> host_dst(buf_size, 0);
-    for (size_t i = 0; i < buf_size; i++)
-    {
-        host_dst[i] = 0;
-    }
 
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -747,7 +747,7 @@ int testImageShare()
     {
         if (i < 256)
         {
-            printf("%d, ", host_dst[i]);
+            printf("%03d, ", host_dst[i]);
         }
     }
     printf("\n");
@@ -776,7 +776,7 @@ int testImageShare()
 
 int main(int argc, char** argv) 
 {
-    int testid = 0;
+    int testid = 2;
     if (argc >= 2) {
         testid = atoi(argv[1]) >=0 ? atoi(argv[1]) : testid;
     }
