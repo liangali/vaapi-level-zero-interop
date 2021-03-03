@@ -728,7 +728,7 @@ int testImageShare()
     CHECK_ZE_STATUS(result, "zeImageCreate");
 
     result = zeCommandListAppendImageCopyToMemory(command_list, host_dst.data(), shared_image, nullptr, nullptr, 0, nullptr);
-    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
+    CHECK_ZE_STATUS(result, "zeCommandListAppendImageCopyToMemory");
 
     result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
