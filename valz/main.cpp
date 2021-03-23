@@ -25,12 +25,14 @@ using namespace std;
 
 #include "video.h"
 
-const char* kernel_spv_file = "../add_kernel.spv";
-const char* kernel_func_name = "cmdlist_add_constant";
+const char* kernel_spv_file = "../copy_nv12_Gen9core.spv";
+const char* kernel_func_name = "ReadNV12KernelFromNV12";
 
 VADisplay va_dpy = NULL;
 int va_fd = -1;
 bool dump_decode_output = false;
+const uint32_t frame_width = CLIP_WIDTH;
+const uint32_t frame_height = CLIP_HEIGHT;
 const size_t dec_pitch = ((CLIP_WIDTH + 255)/256) * 256;
 const size_t y_plane_size = dec_pitch * CLIP_HEIGHT; 
 uint8_t dec_yuv_ref[y_plane_size] = {};
@@ -486,57 +488,6 @@ int initZe()
     result = zeCommandQueueCreate(context, pDevice, &descriptor_cmdqueue, &command_queue);
     CHECK_ZE_STATUS(result, "zeCommandQueueCreate");
 
-#if 0
-    // Create module
-    vector<char> kernel_binary;
-    if (readKernel(kernel_binary) != 0)
-        return -1;
-    ze_module_handle_t module = nullptr;
-    ze_module_desc_t module_desc = {};
-    module_desc.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
-    module_desc.pNext = nullptr;
-    module_desc.format = ZE_MODULE_FORMAT_IL_SPIRV;
-    module_desc.inputSize = static_cast<uint32_t>(kernel_binary.size());
-    module_desc.pInputModule = reinterpret_cast<const uint8_t *>(kernel_binary.data());
-    module_desc.pBuildFlags = nullptr;
-    result = zeModuleCreate(context, pDevice, &module_desc, &module, nullptr);
-    CHECK_ZE_STATUS(result, "zeModuleCreate");
-
-    // Create kernel
-    ze_kernel_handle_t function = nullptr;
-    ze_kernel_desc_t function_desc = {};
-    function_desc.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
-    function_desc.pNext = nullptr;
-    function_desc.flags = 0;
-    function_desc.pKernelName = kernel_func_name;
-    result = zeKernelCreate(module, &function_desc, &function);
-    CHECK_ZE_STATUS(result, "zeKernelCreate");
-
-    result = zeKernelSetGroupSize(function, 1, 1, 1);
-    CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
-
-    size = 256;
-    alignment = 1024;
-    void *memory = nullptr;
-    ze_device_mem_alloc_desc_t device_desc = {};
-    device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
-    device_desc.ordinal = 0;
-    device_desc.flags = 0;
-    device_desc.pNext = nullptr;
-    ze_host_mem_alloc_desc_t host_desc = {};
-    host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
-    host_desc.flags = 0;
-    result = zeMemAllocShared(context, &device_desc, &host_desc, size, alignment, pDevice, &memory);
-    CHECK_ZE_STATUS(result, "zeMemAllocShared");
-
-    result = zeKernelSetArgumentValue(function, 0, sizeof(memory), &memory);
-    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-
-    const int addval = 10;
-    result = zeKernelSetArgumentValue(function, 1, sizeof(addval), &addval);
-    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-#endif
-
     return 0;
 }
 
@@ -782,9 +733,156 @@ int testImageShare()
     return 0;
 }
 
+int testImageShare2()
+{
+    // Create module
+    vector<char> kernel_binary;
+    if (readKernel(kernel_binary) != 0)
+        return -1;
+    ze_module_handle_t module = nullptr;
+    ze_module_desc_t module_desc = {};
+    module_desc.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
+    module_desc.pNext = nullptr;
+    module_desc.format = ZE_MODULE_FORMAT_IL_SPIRV;
+    module_desc.inputSize = static_cast<uint32_t>(kernel_binary.size());
+    module_desc.pInputModule = reinterpret_cast<const uint8_t *>(kernel_binary.data());
+    module_desc.pBuildFlags = nullptr;
+    result = zeModuleCreate(context, pDevice, &module_desc, &module, nullptr);
+    CHECK_ZE_STATUS(result, "zeModuleCreate");
+
+    // Create kernel
+    ze_kernel_handle_t function = nullptr;
+    ze_kernel_desc_t function_desc = {};
+    function_desc.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
+    function_desc.pNext = nullptr;
+    function_desc.flags = 0;
+    function_desc.pKernelName = kernel_func_name;
+    result = zeKernelCreate(module, &function_desc, &function);
+    CHECK_ZE_STATUS(result, "zeKernelCreate");
+
+    // compute number of groups to launch based on image size and group size.
+    uint32_t groupSizeX = 1;
+    uint32_t groupSizeY = 1;
+    uint32_t numGroupsX = frame_width / groupSizeX;
+    uint32_t numGroupsY = frame_height / groupSizeY;
+    ze_group_count_t group_count = { numGroupsX, numGroupsY, 1 };
+
+    result = zeKernelSetGroupSize(function, 1, 1, 1);
+    CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
+
+    const size_t buf_size = frame_width*frame_height*3/2; //dec_pitch * CLIP_HEIGHT;
+    std::vector<uint8_t> host_dst(buf_size, 0);
+    printf("INFO: host buffer size = %d\n", host_dst.size());
+
+    ze_external_memory_import_fd_t import_fd = {
+        ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
+        nullptr, // pNext
+        ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF,
+        dma_buf_fd
+    };
+    // allocate memory for results
+    ze_device_mem_alloc_desc_t alloc_desc = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        nullptr,
+        0, // flags
+        0  // ordinal
+    };
+    ze_image_desc_t image_description = {};
+    image_description.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
+    image_description.format.layout = ZE_IMAGE_FORMAT_LAYOUT_NV12;
+    image_description.pNext = &import_fd;
+    image_description.flags = ZE_IMAGE_FLAG_KERNEL_WRITE; //ZE_IMAGE_FLAG_BIAS_UNCACHED
+    image_description.type = ZE_IMAGE_TYPE_2D;
+    image_description.format.type = ZE_IMAGE_FORMAT_TYPE_UINT;
+    image_description.format.x = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.y = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.z = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.w = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.width = CLIP_WIDTH;
+    image_description.height = CLIP_HEIGHT;
+    image_description.depth = 1;
+    ze_image_handle_t shared_image = nullptr;
+    result = zeImageCreate(context, pDevice, &image_description, &shared_image);
+    CHECK_ZE_STATUS(result, "zeImageCreate");
+
+    void *host_memory = nullptr;
+    ze_device_mem_alloc_desc_t device_desc = {};
+    device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    device_desc.ordinal = 0;
+    device_desc.flags = 0;
+    device_desc.pNext = nullptr;
+    ze_host_mem_alloc_desc_t host_desc = {};
+    host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
+    host_desc.flags = 0;
+    result = zeMemAllocShared(context, &device_desc, &host_desc, buf_size, 1, pDevice, &host_memory);
+    CHECK_ZE_STATUS(result, "zeMemAllocShared");
+
+    // set kernel arguments
+    result = zeKernelSetArgumentValue(function, 0, sizeof(shared_image), &shared_image);
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+    result = zeKernelSetArgumentValue(function, 1, sizeof(frame_width), &frame_width);
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+    result = zeKernelSetArgumentValue(function, 2, sizeof(frame_height), &frame_height);
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+    result = zeKernelSetArgumentValue(function, 3, sizeof(uint8_t*), (const uint8_t*)host_dst.data());
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+
+    result = zeCommandListAppendLaunchKernel(command_list, function, &group_count, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendLaunchKernel");
+
+    result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    result = zeCommandListClose(command_list);
+    CHECK_ZE_STATUS(result, "zeCommandListClose");
+
+    result = zeCommandQueueExecuteCommandLists(command_queue, 1, &command_list, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandQueueExecuteCommandLists");
+
+    result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
+    CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
+
+    printf("Print first 256 bytes of Y Plane: \n");
+    for (size_t i = 0; i < 256; i++)
+    {
+        printf("%03d, ", host_dst[i]);
+    }
+    printf("\n");
+
+    size_t offset = 224*224;
+    printf("Print first 256 bytes of UV Plane: \n");
+    for (size_t i = offset; i < offset + 256; i++)
+    {
+        printf("%03d, ", host_dst[i]);
+    }
+    printf("\n");
+
+    // ofstream outfile;
+    // outfile.open("lz_img_out.yuv", ios::binary);
+    // outfile.write((const char*)host_dst.data(), 224*224*3/2);
+    // outfile.flush();
+    // outfile.close();
+
+    int mismatch_count = 0;
+    for (size_t i = 0; i < 224*224; i++)
+    {
+        if (host_dst[i] != dec_yuv_ref[i])
+        {
+            mismatch_count++;
+        }
+    }
+
+    if (mismatch_count == 0)
+        printf("INFO: ================ surface sharing test passed ================ \n");
+    else
+        printf("INFO: !!!!!!!!!!!!!!!! surface sharing test failed, mismatch_count = %d !!!!!!!!!!!!!!!! \n", mismatch_count);
+
+    return 0;
+}
+
 int main(int argc, char** argv) 
 {
-    int testid = 2;
+    int testid = 3;
     if (argc >= 2) {
         testid = atoi(argv[1]) >=0 ? atoi(argv[1]) : testid;
     }
@@ -833,6 +931,10 @@ int main(int argc, char** argv)
     case 2:
         // test media + level-zero image sharing, copy NV12 VASurface to level-zero image
         testImageShare();
+        break;
+    case 3:
+        // test media + level-zero image sharing, user NV12 copy kernel to copy shared NV12 image to host buffer
+        testImageShare2();
         break;
     default:
         break;
