@@ -32,7 +32,7 @@ VADisplay va_dpy = NULL;
 int va_fd = -1;
 bool dump_decode_output = false;
 const size_t dec_pitch = ((CLIP_WIDTH + 255)/256) * 256;
-const size_t y_plane_size = CLIP_WIDTH*CLIP_HEIGHT; 
+const size_t y_plane_size = dec_pitch * CLIP_HEIGHT; 
 uint8_t dec_yuv_ref[y_plane_size] = {};
 size_t surface_size = 0;
 
@@ -254,11 +254,12 @@ void printSurface(VASurfaceID frame)
     for (size_t i = 0; i < h/2; i++)
         memcpy(dst.data()+(h+i)*w, src+uv_offset+i*pitch, w);
 
+    // ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i dec_out.nv12 dec_out.bmp -y
     FILE* fp = fopen("dec_out.nv12", "wb");
     fwrite(dst.data(), w*h*3/2, 1, fp);
     fclose(fp);
 
-    // ffmpeg -s 224x224 -pix_fmt nv12 -f rawvideo -i dec_out.nv12 dec_out.bmp -y
+    memset(dec_yuv_ref, 0, y_plane_size);
     printf("\n");
     for (size_t i = 0; i < y_plane_size; i++)
     {
@@ -693,6 +694,7 @@ int testImageShare()
     
     const size_t buf_size = surface_size; //dec_pitch * CLIP_HEIGHT;
     std::vector<uint8_t> host_dst(buf_size, 0);
+    printf("INFO: host buffer size = %d\n", host_dst.size());
 
     ze_external_memory_import_fd_t import_fd = {
         ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
@@ -742,23 +744,29 @@ int testImageShare()
     result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
     CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
 
-    printf("\n");
-    for (size_t i = 0; i < host_dst.size(); i++)
+    printf("Print first 256 bytes of Y Plane: \n");
+    for (size_t i = 0; i < 256; i++)
     {
-        if (i < 256)
-        {
-            printf("%03d, ", host_dst[i]);
-        }
+        printf("%03d, ", host_dst[i]);
     }
     printf("\n");
 
-    ofstream outfile;
-    outfile.open("lz_img_out.yuv", ios::binary);
-    outfile.write((const char*)host_dst.data(), host_dst.size());
-    outfile.flush();
+    size_t offset = 224*224;
+    printf("Print first 256 bytes of UV Plane: \n");
+    for (size_t i = offset; i < offset + 256; i++)
+    {
+        printf("%03d, ", host_dst[i]);
+    }
+    printf("\n");
+
+    // ofstream outfile;
+    // outfile.open("lz_img_out.yuv", ios::binary);
+    // outfile.write((const char*)host_dst.data(), 224*224*3/2);
+    // outfile.flush();
+    // outfile.close();
 
     int mismatch_count = 0;
-    for (size_t i = 0; i < 256; i++)
+    for (size_t i = 0; i < 224*224; i++)
     {
         if (host_dst[i] != dec_yuv_ref[i])
         {
