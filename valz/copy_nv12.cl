@@ -1,3 +1,7 @@
+
+// const sampler_t image_sampler =
+//     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
+
 __kernel void ReadNV12KernelFromNV12(
                 read_only image2d_t nv12Img,
                 uint width,
@@ -20,7 +24,8 @@ __kernel void ReadNV12KernelFromNV12(
         if( ( ( tid_y * width ) + tid_x ) < ( width * height ) )
         {
             colorY = read_imagef( nv12Img, samplerA, coord );
-            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) ( 256.0 * colorY.y );
+            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) ( 256.0 * colorY.y ); // (uchar)((tid_y * width) + tid_x);
+            //printf("%f, ", colorY.y);
             
             if( ( tid_x % 2 == 0 ) && ( tid_y % 2 == 0 ) )
             {

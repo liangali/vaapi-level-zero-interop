@@ -760,6 +760,14 @@ int testImageShare2()
     result = zeKernelCreate(module, &function_desc, &function);
     CHECK_ZE_STATUS(result, "zeKernelCreate");
 
+    // https://spec.oneapi.com/level-zero/latest/core/PROG.html#kernel-group-size
+    // Find suggested group size for processing image.
+    uint32_t suggestedGroupSizeX, suggestedGroupSizeY, suggestedGroupSizeZ;
+    result = zeKernelSuggestGroupSize(function, 224, 224, 1, &suggestedGroupSizeX, &suggestedGroupSizeY, &suggestedGroupSizeZ);
+    CHECK_ZE_STATUS(result, "zeKernelSuggestGroupSize");
+    printf("INFO: suggestedGroupSizeX = %d, suggestedGroupSizeY = %d, suggestedGroupSizeZ = %d\n", 
+        suggestedGroupSizeX, suggestedGroupSizeY, suggestedGroupSizeZ);
+
     // compute number of groups to launch based on image size and group size.
     uint32_t groupSizeX = 1;
     uint32_t groupSizeY = 1;
@@ -767,7 +775,7 @@ int testImageShare2()
     uint32_t numGroupsY = frame_height / groupSizeY;
     ze_group_count_t group_count = { numGroupsX, numGroupsY, 1 };
 
-    result = zeKernelSetGroupSize(function, 1, 1, 1);
+    result = zeKernelSetGroupSize(function, groupSizeX, groupSizeY, 1);
     CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
 
     const size_t buf_size = frame_width*frame_height*3/2; //dec_pitch * CLIP_HEIGHT;
@@ -791,13 +799,13 @@ int testImageShare2()
     image_description.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
     image_description.format.layout = ZE_IMAGE_FORMAT_LAYOUT_NV12;
     image_description.pNext = &import_fd;
-    image_description.flags = ZE_IMAGE_FLAG_KERNEL_WRITE; //ZE_IMAGE_FLAG_BIAS_UNCACHED
+    image_description.flags = ZE_IMAGE_FLAG_BIAS_UNCACHED; //ZE_IMAGE_FLAG_BIAS_UNCACHED
     image_description.type = ZE_IMAGE_TYPE_2D;
-    image_description.format.type = ZE_IMAGE_FORMAT_TYPE_UINT;
-    image_description.format.x = ZE_IMAGE_FORMAT_SWIZZLE_X;
-    image_description.format.y = ZE_IMAGE_FORMAT_SWIZZLE_X;
-    image_description.format.z = ZE_IMAGE_FORMAT_SWIZZLE_X;
-    image_description.format.w = ZE_IMAGE_FORMAT_SWIZZLE_X;
+    image_description.format.type = ZE_IMAGE_FORMAT_TYPE_UNORM;
+    image_description.format.x = ZE_IMAGE_FORMAT_SWIZZLE_R;
+    image_description.format.y = ZE_IMAGE_FORMAT_SWIZZLE_G;
+    image_description.format.z = ZE_IMAGE_FORMAT_SWIZZLE_B;
+    image_description.format.w = ZE_IMAGE_FORMAT_SWIZZLE_A;
     image_description.width = CLIP_WIDTH;
     image_description.height = CLIP_HEIGHT;
     image_description.depth = 1;
@@ -805,17 +813,27 @@ int testImageShare2()
     result = zeImageCreate(context, pDevice, &image_description, &shared_image);
     CHECK_ZE_STATUS(result, "zeImageCreate");
 
-    void *host_memory = nullptr;
-    ze_device_mem_alloc_desc_t device_desc = {};
-    device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
-    device_desc.ordinal = 0;
-    device_desc.flags = 0;
-    device_desc.pNext = nullptr;
-    ze_host_mem_alloc_desc_t host_desc = {};
-    host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
-    host_desc.flags = 0;
-    result = zeMemAllocShared(context, &device_desc, &host_desc, buf_size, 1, pDevice, &host_memory);
-    CHECK_ZE_STATUS(result, "zeMemAllocShared");
+    // void *host_memory = nullptr;
+    // ze_device_mem_alloc_desc_t device_desc = {};
+    // device_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    // device_desc.ordinal = 0;
+    // device_desc.flags = 0;
+    // device_desc.pNext = nullptr;
+    // ze_host_mem_alloc_desc_t host_desc = {};
+    // host_desc.stype = ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC;
+    // host_desc.flags = 0;
+    // result = zeMemAllocShared(context, &device_desc, &host_desc, buf_size, 1, pDevice, &host_memory);
+    // CHECK_ZE_STATUS(result, "zeMemAllocShared");
+
+    void *dst_memory = nullptr;
+    ze_device_mem_alloc_desc_t device_desc2 = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        nullptr,
+        0, // flags
+        0  // ordinal
+    };
+    result = zeMemAllocDevice(context, &device_desc2, buf_size, 1, pDevice, &dst_memory);
+    CHECK_ZE_STATUS(result, "zeMemAllocDevice");
 
     // set kernel arguments
     result = zeKernelSetArgumentValue(function, 0, sizeof(shared_image), &shared_image);
@@ -824,7 +842,7 @@ int testImageShare2()
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
     result = zeKernelSetArgumentValue(function, 2, sizeof(frame_height), &frame_height);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-    result = zeKernelSetArgumentValue(function, 3, sizeof(uint8_t*), (const uint8_t*)host_dst.data());
+    result = zeKernelSetArgumentValue(function, 3, sizeof(dst_memory), &dst_memory);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
 
     result = zeCommandListAppendLaunchKernel(command_list, function, &group_count, nullptr, 0, nullptr);
@@ -832,6 +850,9 @@ int testImageShare2()
 
     result = zeCommandListAppendBarrier(command_list, nullptr, 0, nullptr);
     CHECK_ZE_STATUS(result, "zeCommandListAppendBarrier");
+
+    result = zeCommandListAppendMemoryCopy(command_list, host_dst.data(), dst_memory, buf_size, nullptr, 0, nullptr);
+    CHECK_ZE_STATUS(result, "zeCommandListAppendMemoryCopy");
 
     result = zeCommandListClose(command_list);
     CHECK_ZE_STATUS(result, "zeCommandListClose");
