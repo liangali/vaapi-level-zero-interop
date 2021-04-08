@@ -24,7 +24,7 @@ __kernel void ReadNV12KernelFromNV12(
         if( ( ( tid_y * width ) + tid_x ) < ( width * height ) )
         {
             colorY = read_imagef( nv12Img, samplerA, coord );
-            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) ( 256.0 * colorY.y ); // (uchar)((tid_y * width) + tid_x);
+            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) ( 255.0 * colorY.y ); // (uchar)((tid_y * width) + tid_x);//printf("%f, ", colorY.y);
             //printf("%f, ", colorY.y);
             
             if( ( tid_x % 2 == 0 ) && ( tid_y % 2 == 0 ) )
