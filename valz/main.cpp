@@ -35,7 +35,8 @@ const uint32_t frame_width = CLIP_WIDTH;
 const uint32_t frame_height = CLIP_HEIGHT;
 const size_t dec_pitch = ((CLIP_WIDTH + 255)/256) * 256;
 const size_t y_plane_size = dec_pitch * CLIP_HEIGHT; 
-uint8_t dec_yuv_ref[y_plane_size] = {};
+const size_t nv12_size = frame_width * frame_height * 3 / 2;
+uint8_t dec_yuv_ref[nv12_size] = {};
 size_t surface_size = 0;
 
 #define CHECK_VA_STATUS(va_status, func)                                    \
@@ -261,13 +262,14 @@ void printSurface(VASurfaceID frame)
     fwrite(dst.data(), w*h*3/2, 1, fp);
     fclose(fp);
 
-    memset(dec_yuv_ref, 0, y_plane_size);
-    printf("\n");
+    memcpy(dec_yuv_ref, dst.data(), nv12_size);
+
     for (size_t i = 0; i < y_plane_size; i++)
     {
-        if (i < 256)
+        if (i < 256) {
+            if (i%32 == 0)  printf("\n");
             printf("%d, ", (uint8_t)dst[i]);
-        dec_yuv_ref[i] = (uint8_t)dst[i];
+        }
     }
     printf("\n");
 
@@ -778,7 +780,7 @@ int testImageShare2()
     result = zeKernelSetGroupSize(function, groupSizeX, groupSizeY, 1);
     CHECK_ZE_STATUS(result, "zeKernelSetGroupSize");
 
-    const size_t buf_size = frame_width*frame_height*3/2; //dec_pitch * CLIP_HEIGHT;
+    const size_t buf_size = nv12_size;
     std::vector<uint8_t> host_dst(buf_size, 0);
     printf("INFO: host buffer size = %d\n", host_dst.size());
 
@@ -863,32 +865,35 @@ int testImageShare2()
     result = zeCommandQueueSynchronize(command_queue, UINT64_MAX);
     CHECK_ZE_STATUS(result, "zeCommandQueueSynchronize");
 
-    printf("Print first 256 bytes of Y Plane: \n");
+    printf("Print first 256 bytes of Y Plane: ");
     for (size_t i = 0; i < 256; i++)
     {
+        if (i%32 == 0)  printf("\n");
         printf("%03d, ", host_dst[i]);
     }
     printf("\n");
 
     size_t offset = 224*224;
-    printf("Print first 256 bytes of UV Plane: \n");
+    printf("Print first 256 bytes of UV Plane: ");
     for (size_t i = offset; i < offset + 256; i++)
     {
+        if (i%32 == 0)  printf("\n");
         printf("%03d, ", host_dst[i]);
     }
     printf("\n");
 
-    // ofstream outfile;
-    // outfile.open("lz_img_out.yuv", ios::binary);
-    // outfile.write((const char*)host_dst.data(), 224*224*3/2);
-    // outfile.flush();
-    // outfile.close();
+    ofstream outfile;
+    outfile.open("lz_img_out.yuv", ios::binary);
+    outfile.write((const char*)host_dst.data(), 224*224*3/2);
+    outfile.flush();
+    outfile.close();
 
     int mismatch_count = 0;
-    for (size_t i = 0; i < 224*224; i++)
+    for (size_t i = 0; i < nv12_size; i++)
     {
         if (host_dst[i] != dec_yuv_ref[i])
         {
+            printf("pixel_index = %d, dst_pixel = %d, ref_pixel = %d\n", i, host_dst[i], dec_yuv_ref[i]);
             mismatch_count++;
         }
     }
