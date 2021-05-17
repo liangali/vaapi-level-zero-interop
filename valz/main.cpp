@@ -25,7 +25,7 @@ using namespace std;
 
 #include "video.h"
 
-const char* kernel_spv_file_gen9 = "../valz/copy_nv12_Gen12_7dg2.spv";
+const char* kernel_spv_file_gen9 = "../valz/copy_nv12_Gen9core.spv";
 const char* kernel_spv_file_dg2 = "../valz/copy_nv12_Gen12_7dg2.spv";
 char* kernel_spv_file = nullptr;
 const char* kernel_func_name = "ReadNV12KernelFromNV12";
@@ -961,8 +961,13 @@ int main(int argc, char** argv)
         testImageShare();
         break;
     case 3:
-        // test media + level-zero image sharing, user NV12 copy kernel to copy shared NV12 image to host buffer
+        // test media + level-zero image sharing on DG2, user NV12 copy kernel to copy shared NV12 image to host buffer
         kernel_spv_file = (char*)kernel_spv_file_dg2;
+        testImageShare2();
+        break;
+    case 4:
+        // test media + level-zero image sharing on Gen9, user NV12 copy kernel to copy shared NV12 image to host buffer
+        kernel_spv_file = (char*)kernel_spv_file_gen9;
         testImageShare2();
         break;
     default:
