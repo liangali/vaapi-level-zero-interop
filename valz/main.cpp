@@ -26,7 +26,7 @@ using namespace std;
 #include "video.h"
 
 const char* kernel_spv_file_gen9 = "../valz/copy_nv12_Gen9core.spv";
-const char* kernel_spv_file_dg2 = "../valz/copy_nv12_Gen12_7dg2.spv";
+const char* kernel_spv_file_dg2 = "../valz/copy_nv12_XE_HPG_COREdg2.spv";
 char* kernel_spv_file = nullptr;
 const char* kernel_func_name = "ReadNV12KernelFromNV12";
 
