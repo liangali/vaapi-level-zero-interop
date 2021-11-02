@@ -32,6 +32,8 @@ const char* kernel_func_name = "ReadNV12KernelFromNV12";
 
 VADisplay va_dpy = NULL;
 int va_fd = -1;
+VAStatus va_status;
+
 bool dump_decode_output = false;
 const uint32_t frame_width = CLIP_WIDTH;
 const uint32_t frame_height = CLIP_HEIGHT;
@@ -60,7 +62,6 @@ if (err < 0 ) { \
 int initVA()
 {
     VADisplay disp;
-    VAStatus va_res = VA_STATUS_SUCCESS;
     int major_version = 0, minor_version = 0;
 
     int adapter_num = 0;
@@ -81,11 +82,11 @@ int initVA()
         return -1;
     }
 
-    va_res = vaInitialize(va_dpy, &major_version, &minor_version);
-    if (VA_STATUS_SUCCESS != va_res) {
+    va_status = vaInitialize(va_dpy, &major_version, &minor_version);
+    if (VA_STATUS_SUCCESS != va_status) {
         close(va_fd);
         va_fd = -1;
-        printf("ERROR: failed in vaInitialize with err = %d\n", va_res);
+        printf("ERROR: failed in vaInitialize with err = %d\n", va_status);
         return -1;
     }
 
@@ -105,6 +106,64 @@ void closeVA()
     va_fd = -1;
 }
 
+void printVAImage(VAImage &img)
+{
+    printf("\nVAImage: ================\n");
+    printf("VAImage: image_id = %d\n", img.image_id);
+    printf("VAImage: buf_id   = %d\n", img.buf);
+    printf("VAImage: format: \n");
+    printf("            fourcc         = 0x%08x\n", img.format.fourcc);
+    printf("            byte_order     = %d\n", img.format.byte_order);
+    printf("            bits_per_pixel = %d\n", img.format.bits_per_pixel);
+    printf("            depth          = %d\n", img.format.depth);
+    printf("            red_mask       = %d\n", img.format.red_mask);
+    printf("            green_mask     = %d\n", img.format.green_mask);
+    printf("            blue_mask      = %d\n", img.format.blue_mask);
+    printf("            alpha_mask     = %d\n", img.format.alpha_mask);
+    printf("VAImage: width = %d\n", img.width);
+    printf("VAImage: height = %d\n", img.height);
+    printf("VAImage: data_size = %d\n", img.data_size);
+    printf("VAImage: num_planes = %d\n", img.num_planes);
+    printf("VAImage: pitches = [%d, %d, %d]\n", img.pitches[0], img.pitches[1], img.pitches[2]);
+    printf("VAImage: offsets = [%d, %d, %d]\n", img.offsets[0], img.offsets[1], img.offsets[2]);
+    printf("VAImage: num_palette_entries = %d\n", img.num_palette_entries);
+    printf("VAImage: entry_bytes = %d\n", img.entry_bytes);
+    printf("VAImage: component_order = [%d, %d, %d, %d]\n", img.component_order[0], img.component_order[1], img.component_order[2], img.component_order[3]);
+    printf("VAImage: ================\n");
+}
+
+int save_surface(VASurfaceID surf_id)
+{
+    VAImage va_img = {};
+    void *surf_ptr = nullptr;
+
+    va_status = vaDeriveImage(va_dpy, surf_id, &va_img);
+    CHECK_VA_STATUS(va_status, "vaDeriveImage");
+    uint16_t w = va_img.width;
+    uint16_t h = va_img.height;
+    printVAImage(va_img);
+    
+    va_status = vaMapBuffer(va_dpy, va_img.buf, &surf_ptr);
+    CHECK_VA_STATUS(va_status, "vaMapBuffer");
+
+    char* src = (char*)surf_ptr;
+    vector<char> dst(w*h*3, 0);
+
+    // Copy RGBP data
+    for (size_t n = 0; n < 3; n++)
+        for (size_t i = 0; i < h; i++)
+            memcpy(dst.data() + n*w*h + i*w, src + va_img.offsets[n] + i*va_img.pitches[n], w);
+
+    FILE* fp = fopen("../../test.out.rgbp", "wb");
+    fwrite(dst.data(), w*h*3, 1, fp);
+    fclose(fp);
+
+    vaUnmapBuffer(va_dpy, va_img.buf);
+    vaDestroyImage(va_dpy, va_img.image_id);
+
+    return 0;
+}
+
 int decodeFrame(VASurfaceID& frame)
 {
     VAEntrypoint entrypoints[5];
@@ -115,7 +174,6 @@ int decodeFrame(VASurfaceID& frame)
     VAContextID context_id;
     VABufferID pic_param_buf, iqmatrix_buf, slice_param_buf, slice_data_buf;
     int major_ver, minor_ver;
-    VAStatus va_status;
     int putsurface=0;
 
     va_status = vaQueryConfigEntrypoints(va_dpy, VAProfileH264Main, entrypoints, 
@@ -214,35 +272,76 @@ int decodeFrame(VASurfaceID& frame)
     return 0;
 }
 
-void printVAImage(VAImage &img)
+int processFrame(VASurfaceID src_surfid, VASurfaceID& dst_surfid)
 {
-    printf("\nVAImage: ================\n");
-    printf("VAImage: image_id = %d\n", img.image_id);
-    printf("VAImage: buf_id   = %d\n", img.buf);
-    printf("VAImage: format: \n");
-    printf("            fourcc         = 0x%08x\n", img.format.fourcc);
-    printf("            byte_order     = %d\n", img.format.byte_order);
-    printf("            bits_per_pixel = %d\n", img.format.bits_per_pixel);
-    printf("            depth          = %d\n", img.format.depth);
-    printf("            red_mask       = %d\n", img.format.red_mask);
-    printf("            green_mask     = %d\n", img.format.green_mask);
-    printf("            blue_mask      = %d\n", img.format.blue_mask);
-    printf("            alpha_mask     = %d\n", img.format.alpha_mask);
-    printf("VAImage: width = %d\n", img.width);
-    printf("VAImage: height = %d\n", img.height);
-    printf("VAImage: data_size = %d\n", img.data_size);
-    printf("VAImage: num_planes = %d\n", img.num_planes);
-    printf("VAImage: pitches = [%d, %d, %d]\n", img.pitches[0], img.pitches[1], img.pitches[2]);
-    printf("VAImage: offsets = [%d, %d, %d]\n", img.offsets[0], img.offsets[1], img.offsets[2]);
-    printf("VAImage: num_palette_entries = %d\n", img.num_palette_entries);
-    printf("VAImage: entry_bytes = %d\n", img.entry_bytes);
-    printf("VAImage: component_order = [%d, %d, %d, %d]\n", img.component_order[0], img.component_order[1], img.component_order[2], img.component_order[3]);
-    printf("VAImage: ================\n");
+    uint32_t srcw = frame_width;
+    uint32_t srch = frame_height;
+    uint32_t dstw = frame_width;
+    uint32_t dsth = frame_height;
+    uint32_t src_fourcc  = VA_FOURCC('N','V','1','2');
+    uint32_t dst_fourcc  = VA_FOURCC_RGBP; //VA_FOURCC('N','V','1','2'); //VA_FOURCC('I','4','2','0');
+    uint32_t src_format  = VA_RT_FORMAT_YUV420;
+    uint32_t dst_format  = VA_RT_FORMAT_RGBP;
+    VASurfaceID src_surf = src_surfid;
+    
+    VAConfigAttrib attrib = {};
+    attrib.type = VAConfigAttribRTFormat;
+    va_status = vaGetConfigAttributes(va_dpy, VAProfileNone, VAEntrypointVideoProc, &attrib, 1);
+    CHECK_VA_STATUS(va_status, "vaGetConfigAttributes");
+
+    VAConfigID config_id = 0;
+    va_status = vaCreateConfig(va_dpy, VAProfileNone, VAEntrypointVideoProc, &attrib, 1, &config_id);
+    CHECK_VA_STATUS(va_status, "vaCreateConfig");
+    
+    VASurfaceAttrib surf_attrib = {};
+    surf_attrib.type =  VASurfaceAttribPixelFormat;
+    surf_attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
+    surf_attrib.value.type = VAGenericValueTypeInteger;
+    surf_attrib.value.value.i = dst_fourcc;
+    va_status = vaCreateSurfaces(va_dpy, dst_format, dstw, dsth, &dst_surfid, 1, &surf_attrib, 1);
+    CHECK_VA_STATUS(va_status, "vaCreateSurfaces");
+    printf("####LOG: dst_surf = %d\n", dst_surfid);
+
+    VAContextID ctx_id = 0;
+    va_status = vaCreateContext(va_dpy, config_id, dstw, dsth, VA_PROGRESSIVE, &dst_surfid, 1, &ctx_id);
+    CHECK_VA_STATUS(va_status, "vaCreateContext");
+    printf("####LOG: ctx_id = 0x%08x\n", ctx_id);
+
+    VAProcPipelineParameterBuffer pipeline_param = {};
+    VARectangle src_rect = {0, 0, srcw, srch};
+    VARectangle dst_rect = {0, 0, dstw, dsth};
+    VABufferID pipeline_buf_id = VA_INVALID_ID;
+    uint32_t filter_count = 0;
+    VABufferID filter_buf_id = VA_INVALID_ID;
+    pipeline_param.surface = src_surf;
+    pipeline_param.surface_region = &src_rect;
+    pipeline_param.output_region = &dst_rect;
+    pipeline_param.filter_flags = 0;
+    pipeline_param.filters      = &filter_buf_id;
+    pipeline_param.num_filters  = filter_count;
+    va_status = vaCreateBuffer(va_dpy, ctx_id, VAProcPipelineParameterBufferType, sizeof(pipeline_param), 1, &pipeline_param, &pipeline_buf_id);
+    CHECK_VA_STATUS(va_status, "vaCreateBuffer");
+
+    va_status = vaBeginPicture(va_dpy, ctx_id, dst_surfid);
+    CHECK_VA_STATUS(va_status, "vaBeginPicture");
+
+    va_status = vaRenderPicture(va_dpy, ctx_id, &pipeline_buf_id, 1);
+    CHECK_VA_STATUS(va_status, "vaRenderPicture");
+
+    va_status = vaEndPicture(va_dpy, ctx_id);
+    CHECK_VA_STATUS(va_status, "vaEndPicture");
+
+    save_surface(dst_surfid);
+
+    vaDestroyBuffer(va_dpy, pipeline_buf_id);
+    vaDestroyContext(va_dpy, ctx_id);
+    vaDestroyConfig(va_dpy, config_id);
+
+    return 0;
 }
 
 void printSurface(VASurfaceID frame)
 {
-    VAStatus va_status;
     VAImage va_img = {};
     void *surf_ptr = nullptr;
 
@@ -926,7 +1025,6 @@ int main(int argc, char** argv)
         testid = atoi(argv[1]) >=0 ? atoi(argv[1]) : testid;
     }
 
-    VAStatus va_status;
     if (initVA()) {
         printf("ERROR: initVA failed!\n");
         return -1;
@@ -938,8 +1036,14 @@ int main(int argc, char** argv)
         printf("ERROR: decode failed\n");
         return -1;
     }
-
     printSurface(va_frame);
+
+    // Convert NV12 to RGBP
+    VASurfaceID va_frame2;
+    if(processFrame(va_frame, va_frame2)) {
+        printf("ERROR: decode failed\n");
+        return -1;
+    }
 
     // 1. add meta data in API
     // 2. put meta data in extra page
@@ -986,8 +1090,10 @@ int main(int argc, char** argv)
     }
 
     zeContextDestroy(context);
+    vaDestroySurfaces(va_dpy, &va_frame, 1);
+    vaDestroySurfaces(va_dpy, &va_frame2, 1);
     closeVA();
-    
+
     printf("done\n");
     return 0;
 }
