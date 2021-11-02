@@ -94,6 +94,17 @@ int initVA()
     return 0;
 }
 
+void closeVA()
+{
+    vaTerminate(va_dpy);
+
+    if (va_fd < 0)
+        return;
+
+    close(va_fd);
+    va_fd = -1;
+}
+
 int decodeFrame(VASurfaceID& frame)
 {
     VAEntrypoint entrypoints[5];
@@ -975,6 +986,8 @@ int main(int argc, char** argv)
     }
 
     zeContextDestroy(context);
+    closeVA();
+    
     printf("done\n");
     return 0;
 }
