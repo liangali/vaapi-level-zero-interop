@@ -43,6 +43,7 @@ const size_t y_plane_size = dec_pitch * CLIP_HEIGHT;
 const size_t nv12_size = frame_width * frame_height * 3 / 2;
 const size_t rgbp_size = frame_width * frame_height * 3;
 uint8_t dec_yuv_ref[nv12_size] = {};
+uint8_t rgbp_ref[rgbp_size] = {};
 size_t surface_size = 0;
 
 #define CHECK_VA_STATUS(va_status, func)                                    \
@@ -156,7 +157,17 @@ int save_surface(VASurfaceID surf_id)
         for (size_t i = 0; i < h; i++)
             memcpy(dst.data() + n*w*h + i*w, src + va_img.offsets[n] + i*va_img.pitches[n], w);
 
-    FILE* fp = fopen("../../test.out.rgbp", "wb");
+    memcpy(rgbp_ref, dst.data(), w*h*3);
+
+    printf("Print first 256 bytes of RGBP reference buffer: ");
+    for (size_t i = 0; i < 256; i++)
+    {
+        if (i%32 == 0)  printf("\n");
+        printf("%03d, ", rgbp_ref[i]);
+    }
+    printf("\n");
+
+    FILE* fp = fopen("vpp.out.rgbp", "wb");
     fwrite(dst.data(), w*h*3, 1, fp);
     fclose(fp);
 
@@ -913,14 +924,14 @@ int testImageShareRGBP()
     outfile.close();
 
     int mismatch_count = 1;
-    // for (size_t i = 0; i < rgbp_size; i++)
-    // {
-    //     if (host_dst[i] != dec_yuv_ref[i])
-    //     {
-    //         // printf("pixel_index = %d, dst_pixel = %d, ref_pixel = %d\n", i, host_dst[i], dec_yuv_ref[i]);
-    //         mismatch_count++;
-    //     }
-    // }
+    for (size_t i = 0; i < rgbp_size; i++)
+    {
+        if (host_dst[i] != rgbp_ref[i])
+        {
+            // printf("pixel_index = %d, dst_pixel = %d, ref_pixel = %d\n", i, host_dst[i], dec_yuv_ref[i]);
+            mismatch_count++;
+        }
+    }
 
     if (mismatch_count == 0)
         printf("INFO: ================ surface sharing test passed ================ \n");

@@ -37,7 +37,7 @@ __kernel void ReadNV12KernelFromNV12(
 }
 
 __kernel void ReadRGBPImage(
-                read_only image2d_t nv12Img,
+                read_only image2d_t imgR,
                 uint width,
                 uint height,
                __global uchar* pDest )
@@ -53,18 +53,17 @@ __kernel void ReadRGBPImage(
 
     if (tid_x == 0 && tid_y == 0)
     {
-        int2 dim2 = get_image_dim(nv12Img);
+        int2 dim2 = get_image_dim(imgR);
         printf("**** w = %d, h = %d, dim = (%d, %d), channel_data_type = 0x%08x, channel_order = 0x%08x\n", 
-            get_image_width(nv12Img), 
-            get_image_height(nv12Img), 
+            get_image_width(imgR), 
+            get_image_height(imgR), 
             dim2[0], dim2[1], 
-            get_image_channel_data_type(nv12Img), 
-            get_image_channel_order(nv12Img));
+            get_image_channel_data_type(imgR), 
+            get_image_channel_order(imgR));
 
         uint4 colorR;
-        colorR = read_imageui( nv12Img, samplerA, (int2)(0, 0));
+        colorR = read_imageui( imgR, samplerA, (int2)(0, 0));
         printf("**** colorR = [%d, %d, %d, %d]\n", colorR.x, colorR.y, colorR.z, colorR.w);
-
     }
 
 
@@ -75,8 +74,8 @@ __kernel void ReadRGBPImage(
 
         if( ( ( tid_y * width ) + tid_x ) < ( width * height ) )
         {
-            colorY = read_imageui( nv12Img, samplerA, coord );
-            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) colorY.x;
+            colorY = read_imageui( imgR, samplerA, coord );
+            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) colorY.x; //( uchar ) ((( tid_y * width ) + tid_x)%256);
             // printf("%f, ", colorY.x);
             
             // if( ( tid_x % 2 == 0 ) && ( tid_y % 2 == 0 ) )
