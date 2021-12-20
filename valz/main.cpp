@@ -852,28 +852,32 @@ int testImageShareRGBP()
     result = zeImageCreate(context, pDevice, &image_description, &shared_image);
     CHECK_ZE_STATUS(result, "zeImageCreate");
 
-    // create R channel image from imageview of share RGBP image
-    ze_image_view_planar_exp_desc_t planeDesc = {};
-    planeDesc.stype = ZE_STRUCTURE_TYPE_IMAGE_VIEW_PLANAR_EXP_DESC;
-    planeDesc.planeIndex = 0u; // R channel
-    ze_image_handle_t img_r = nullptr;
-    ze_image_desc_t imgview_desc_r = {};
-    imgview_desc_r.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
-    imgview_desc_r.format.layout = ZE_IMAGE_FORMAT_LAYOUT_8;
-    imgview_desc_r.pNext = &planeDesc;
-    imgview_desc_r.flags = ZE_IMAGE_FLAG_BIAS_UNCACHED; //ZE_IMAGE_FLAG_BIAS_UNCACHED
-    imgview_desc_r.type = ZE_IMAGE_TYPE_2D;
-    imgview_desc_r.format.type = ZE_IMAGE_FORMAT_TYPE_UINT;
-    imgview_desc_r.format.x = ZE_IMAGE_FORMAT_SWIZZLE_R;
-    imgview_desc_r.format.y = ZE_IMAGE_FORMAT_SWIZZLE_G;
-    imgview_desc_r.format.z = ZE_IMAGE_FORMAT_SWIZZLE_B;
-    imgview_desc_r.format.w = ZE_IMAGE_FORMAT_SWIZZLE_A;
-    imgview_desc_r.width = CLIP_WIDTH;
-    imgview_desc_r.height = CLIP_HEIGHT;
-    imgview_desc_r.depth = 1;
-    result = zeImageViewCreateExp(context, pDevice, &imgview_desc_r, shared_image, &img_r);
-    CHECK_ZE_STATUS(result, "zeImageViewCreateExp");
-    printf("#### result = 0x%x, shared_image = 0x%x, img_r = 0x%x\n", result, shared_image, img_r);
+    ze_image_handle_t img_planes[3] = {};
+    for (uint32_t i = 0; i < 3; i++)
+    {
+        // create R channel image from imageview of share RGBP image
+        ze_image_view_planar_exp_desc_t planeDesc = {};
+        planeDesc.stype = ZE_STRUCTURE_TYPE_IMAGE_VIEW_PLANAR_EXP_DESC;
+        planeDesc.planeIndex = i; // R channel
+        // ze_image_handle_t img_r = nullptr;
+        ze_image_desc_t imgview_desc = {};
+        imgview_desc.stype = ZE_STRUCTURE_TYPE_IMAGE_DESC;
+        imgview_desc.format.layout = ZE_IMAGE_FORMAT_LAYOUT_8;
+        imgview_desc.pNext = &planeDesc;
+        imgview_desc.flags = ZE_IMAGE_FLAG_BIAS_UNCACHED; //ZE_IMAGE_FLAG_BIAS_UNCACHED
+        imgview_desc.type = ZE_IMAGE_TYPE_2D;
+        imgview_desc.format.type = ZE_IMAGE_FORMAT_TYPE_UINT;
+        imgview_desc.format.x = ZE_IMAGE_FORMAT_SWIZZLE_R;
+        imgview_desc.format.y = ZE_IMAGE_FORMAT_SWIZZLE_G;
+        imgview_desc.format.z = ZE_IMAGE_FORMAT_SWIZZLE_B;
+        imgview_desc.format.w = ZE_IMAGE_FORMAT_SWIZZLE_A;
+        imgview_desc.width = CLIP_WIDTH;
+        imgview_desc.height = CLIP_HEIGHT;
+        imgview_desc.depth = 1;
+        result = zeImageViewCreateExp(context, pDevice, &imgview_desc, shared_image, &img_planes[i]);
+        CHECK_ZE_STATUS(result, "zeImageViewCreateExp");
+        printf("#### result = 0x%x, shared_image = 0x%x, img = 0x%x\n", result, shared_image, img_planes[i]);
+    }
 
     void *dst_memory = nullptr;
     ze_device_mem_alloc_desc_t device_desc2 = {
@@ -884,15 +888,21 @@ int testImageShareRGBP()
     };
     result = zeMemAllocDevice(context, &device_desc2, buf_size, 1, pDevice, &dst_memory);
     CHECK_ZE_STATUS(result, "zeMemAllocDevice");
+    
 
     // set kernel arguments
-    result = zeKernelSetArgumentValue(function, 0, sizeof(img_r), &img_r);
+    result = zeKernelSetArgumentValue(function, 0, sizeof(img_planes[0]), &img_planes[0]);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-    result = zeKernelSetArgumentValue(function, 1, sizeof(frame_width), &frame_width);
+    result = zeKernelSetArgumentValue(function, 1, sizeof(img_planes[1]), &img_planes[1]);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-    result = zeKernelSetArgumentValue(function, 2, sizeof(frame_height), &frame_height);
+    result = zeKernelSetArgumentValue(function, 2, sizeof(img_planes[2]), &img_planes[2]);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
-    result = zeKernelSetArgumentValue(function, 3, sizeof(dst_memory), &dst_memory);
+ 
+    result = zeKernelSetArgumentValue(function, 3, sizeof(frame_width), &frame_width);
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+    result = zeKernelSetArgumentValue(function, 4, sizeof(frame_height), &frame_height);
+    CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
+    result = zeKernelSetArgumentValue(function, 5, sizeof(dst_memory), &dst_memory);
     CHECK_ZE_STATUS(result, "zeKernelSetArgumentValue");
 
     result = zeCommandListAppendLaunchKernel(command_list, function, &group_count, nullptr, 0, nullptr);
