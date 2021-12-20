@@ -306,12 +306,16 @@ int processFrame(VASurfaceID src_surfid, VASurfaceID& dst_surfid)
     va_status = vaCreateConfig(va_dpy, VAProfileNone, VAEntrypointVideoProc, &attrib, 1, &config_id);
     CHECK_VA_STATUS(va_status, "vaCreateConfig");
     
-    VASurfaceAttrib surf_attrib = {};
-    surf_attrib.type =  VASurfaceAttribPixelFormat;
-    surf_attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
-    surf_attrib.value.type = VAGenericValueTypeInteger;
-    surf_attrib.value.value.i = dst_fourcc;
-    va_status = vaCreateSurfaces(va_dpy, dst_format, dstw, dsth, &dst_surfid, 1, &surf_attrib, 1);
+    VASurfaceAttrib surf_attrib[2] = {};
+    surf_attrib[0].type =  VASurfaceAttribPixelFormat;
+    surf_attrib[0].flags = VA_SURFACE_ATTRIB_SETTABLE;
+    surf_attrib[0].value.type = VAGenericValueTypeInteger;
+    surf_attrib[0].value.value.i = dst_fourcc;
+    surf_attrib[1].type =  VASurfaceAttribUsageHint;
+    surf_attrib[1].flags = VA_SURFACE_ATTRIB_SETTABLE;
+    surf_attrib[1].value.type = VAGenericValueTypeInteger;
+    surf_attrib[1].value.value.i = VA_SURFACE_ATTRIB_USAGE_HINT_VPP_WRITE;
+    va_status = vaCreateSurfaces(va_dpy, dst_format, dstw, dsth, &dst_surfid, 1, surf_attrib, 2);
     CHECK_VA_STATUS(va_status, "vaCreateSurfaces");
     printf("####LOG: dst_surf = %d\n", dst_surfid);
 

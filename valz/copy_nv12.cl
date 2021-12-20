@@ -75,7 +75,10 @@ __kernel void ReadRGBPImage(
         if( ( ( tid_y * width ) + tid_x ) < ( width * height ) )
         {
             colorY = read_imageui( imgR, samplerA, coord );
-            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) colorY.x; //( uchar ) ((( tid_y * width ) + tid_x)%256);
+
+            pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) colorY.x; 
+            // pDest[ ( tid_y * width ) + tid_x ] = ( uchar ) ((( tid_y * width ) + tid_x)%256); //( uchar ) colorY.x; 
+
             // printf("%f, ", colorY.x);
             
             // if( ( tid_x % 2 == 0 ) && ( tid_y % 2 == 0 ) )
