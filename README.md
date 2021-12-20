@@ -16,7 +16,7 @@ generate spv kernel file from OpenCL kernel source
 
 ```bash
 # for skl-gen9
-ocloc -file copy_nv12.cl -device skl
+ocloc -file copy_surface.cl -device skl
 # for dg2
-ocloc -file copy_nv12.cl -device dg2
+ocloc -file copy_surface.cl -device dg2
 ```

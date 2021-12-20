@@ -25,8 +25,8 @@ using namespace std;
 
 #include "video.h"
 
-const char* kernel_spv_file_gen9 = "../valz/copy_nv12_Gen9core.spv";
-const char* kernel_spv_file_dg2 = "../valz/copy_nv12_XE_HPG_COREdg2.spv";
+const char* kernel_spv_file_gen9 = "../valz/copy_surface_Gen9core.spv";
+const char* kernel_spv_file_dg2 = "../valz/copy_surface_XE_HPG_COREdg2.spv";
 char* kernel_spv_file = nullptr;
 const char* kernel_func_nv12 = "ReadNV12KernelFromNV12";
 const char* kernel_func_rgbp = "ReadRGBPImage";

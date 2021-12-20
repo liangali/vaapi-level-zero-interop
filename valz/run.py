@@ -15,7 +15,7 @@ def dump_surface(w, h, infile):
 
 run_cmd('cd ../build && cmake ../valz')
 run_cmd('cd ../build && make')
-run_cmd('rm copy_nv12_XE_HPG_COREdg2.*')
-run_cmd('ocloc -file copy_nv12.cl -device dg2')
+run_cmd('rm copy_surface_XE_HPG_COREdg2.*')
+run_cmd('ocloc -file copy_surface.cl -device dg2')
 run_cmd('cd ../build && ./valz')
 dump_surface(224, 224, '../build/lz_img_out.yuv')
